@@ -1,20 +1,27 @@
-name: edm
+name: edm-operator
 channels:
   - pytorch
   - nvidia
   - conda-forge
 dependencies:
-  - python>=3.8, < 3.10  # package build failures on 3.10
+  - python
   - pip
-  - numpy>=1.20
-  - click>=8.0
-  - pillow>=8.3.1
-  - scipy>=1.7.1
-  - pytorch=1.12.1
+  - numpy
+  - click
+  - pillow
+  - scipy
+  - pytorch
   - psutil
   - requests
   - tqdm
   - imageio
   - pip:
-    - imageio-ffmpeg>=0.4.3
-    - pyspng
+      - imageio-ffmpeg
+      - pyspng
+      - git+https://gitlab.eumetsat.int/eumetlab/data-services/eumdac.git
+      - matplotlib
+      - python-dotenv
+      - xarray[complete]
+      - dask
+      - geopy
+      - pyproj
