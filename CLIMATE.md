@@ -1,6 +1,10 @@
 # Using Diffusion Denoising Operators for Climate Data Analysis
 
-## Data Setup
+## Data
+
+We will use a combination of different public climate data for our analysis. Here is a list of the datasets we will use:
+
+### EUMETSAT
 
 We use the [EUMSTAT data repository](https://data.eumetsat.int) which is a convenient way to access both remote sensory (sattellite) and in-situ climate data.
 Make sure to create an account and store your credentials.

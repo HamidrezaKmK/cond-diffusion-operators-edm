@@ -23,8 +23,14 @@ class EumstatDataset(Dataset, ABC):
         end_time: datetime | str,
         collection_id: str,
         path: str = os.path.join("outputs", "data", "eumstat"),
-        query_elements: dict | None = None,
+        extra_query_elements: dict | None = None,
     ):
+        """
+        A torch dataset that interfaces with the EUMSTAT API. It takes in a query and downloads the appropriate data
+        in the specified path. Each element of this dataset maps to an nc file with latitudes, longitudes, times and an attribute.
+
+        This dataset class is then passed to a RegionalDataset object that will sample regions from the data.
+        """
         self.path = path
         os.makedirs(self.path, exist_ok=True)
 
@@ -48,7 +54,7 @@ class EumstatDataset(Dataset, ABC):
             geo='POLYGON(({}))'.format(','.join(["{} {}".format(*coord) for coord in geometry])),
             dtstart=self.start_time, 
             dtend=self.end_time,
-            **(query_elements or {}),
+            **(extra_query_elements or {}),
         )
         self.all_product_names = []
         pbar = tqdm(products, desc="downloading ...")
@@ -111,12 +117,12 @@ class ASCATDataset(EumstatDataset):
         # >> latitudes
         latitudes_scale_factor = ds.coords['lat'].attrs['scale_factor']
         latitudes_offset = ds.coords['lat'].attrs['add_offset']
-        latitudes = latitudes_scale_factor * torch.tensor(ds.coords['lat'].values, dtype=torch.float32) + latitudes_offset
+        latitudes: torch.Tensor = latitudes_scale_factor * torch.tensor(ds.coords['lat'].values, dtype=torch.float32) + latitudes_offset
 
         # >> longitudes
         longitudes_scale_factor = ds.coords['lon'].attrs['scale_factor']
         longitudes_offset = ds.coords['lon'].attrs['add_offset']
-        longitudes = longitudes_scale_factor * torch.tensor(ds.coords['lon'].values, dtype=torch.float32) + longitudes_offset
+        longitudes: torch.Tensor = longitudes_scale_factor * torch.tensor(ds.coords['lon'].values, dtype=torch.float32) + longitudes_offset
 
         # >> attriute
         attribute_scale_factor = ds[self.attribute].attrs['scale_factor']
@@ -128,7 +134,7 @@ class ASCATDataset(EumstatDataset):
         times = (ds['time'].values - np.datetime64(self.start_time)) / np.timedelta64(1, 's') / 3600.
         times = torch.tensor(times, dtype=torch.float32)
 
-        return latitudes, longitudes, times, attribute
+        return latitudes.flatten(), longitudes.flatten(), times.flatten(), attribute.flatten()
 
 
 class HIRSDataset(EumstatDataset):
