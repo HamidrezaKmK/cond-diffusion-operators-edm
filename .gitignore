@@ -7,3 +7,9 @@ downloads/
 fid-refs/
 exps/
 slurm*.out
+
+# dotenv environment file
+.env
+
+# logs
+outputs/
