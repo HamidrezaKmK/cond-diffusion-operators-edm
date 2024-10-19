@@ -449,6 +449,6 @@ class ERA5RegionalDataset(RegionalDataset):
         x, y = transformer.transform(lats, lons)
         times = times.astype('timedelta64[s]').astype(float) / 3600.
 
-        msk = (x >= -self.EW_length) & (x <= self.EW_length) & (y >= -self.NS_length / 2) & (y <= self.NS_length / 2)
+        msk = (x >= -self.EW_length / 2) & (x <= self.EW_length / 2) & (y >= -self.NS_length / 2) & (y <= self.NS_length / 2)
 
         return torch.from_numpy(x).float()[msk], torch.from_numpy(y).float()[msk], torch.from_numpy(times).float()[msk], torch.from_numpy(attrs).float()[msk], center_lat, center_lon, time_center
