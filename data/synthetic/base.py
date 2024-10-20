@@ -37,6 +37,29 @@ def perlin_mask_sampler(
 
 class SpatioTemporalSlice(Dataset):
     
+    """Temporal and spatial slices of a spatio-temporal simulation.
+
+    Parameters
+    ----------
+    entire_simulation: np.ndarray
+        A simulation of shape [n_sumulations, n_timesteps, *spatial_shape]
+        that is stored in a numpy array. The first coordinate is one of the independent simulations,
+        the second coordinate is the time dimension, and the rest of the coordinates are the spatial dimensions.
+    spatial_window: Tuple | int
+        The size of the spatial window rectangle to sample from the data. The dimension of spatial_window
+        should match the spatial dimensions of the simulation. If an integer is provided, the spatial window
+        is an interval of that size, if it is 2D then it means that it is a rectangle with edges spatial_window[0] and spatial_window[1]
+    temporal_window: int
+        The size of the temporal window to sample from the data. It is an interval of that size.
+    mask_sampler: Callable
+        This should be a callable function that takes in a tuple `shape` and a `seed` and returns a binary numpy array
+        with the same shape as `shape`. The mask_sampler is used to mask out values of the simulation to artificially
+        make it irregular
+    total_count: int
+        The length of the dataset, i.e. the number of spatio-temporal slices to sample from the simulation
+    dtype: torch.dtype, optional
+        The data type of the output tensors, by default torch.float32
+    """
     def __init__(
         self,
         entire_simulation: np.ndarray,
@@ -46,9 +69,6 @@ class SpatioTemporalSlice(Dataset):
         total_count: int,
         dtype: torch.dtype = torch.float32,
     ):
-        """
-        TODO: Add docstring
-        """
         # store the parameters
         self.spatial_window = (spatial_window,) if isinstance(spatial_window, int) else spatial_window
         self.temporal_window = temporal_window
