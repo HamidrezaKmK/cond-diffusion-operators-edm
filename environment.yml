@@ -4,7 +4,7 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - python
+  - python=3.10
   - pip
   - numpy
   - click
@@ -32,3 +32,8 @@ dependencies:
       - matplotlib
       - noise
       - joblib
+      - jstyleson
+      - torchvision
+      - einops
+      - omegaconf
+      - logger

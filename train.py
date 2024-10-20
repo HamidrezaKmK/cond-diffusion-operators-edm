@@ -12,6 +12,7 @@ import pickle
 from torch_utils import distributed as dist
 from training import training_loop
 
+import dotenv
 from omegaconf import OmegaConf as OC
 import dataclasses
 from dataclasses import asdict, dataclass, field
@@ -341,6 +342,8 @@ def parse_args():
     return args
 
 if __name__ == "__main__":
+    
+    dotenv.load_dotenv(override=True)
 
     args = parse_args()
 

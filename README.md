@@ -12,7 +12,7 @@ To create an environment called `edm_fs`, run:
 conda env create -f environment.yml
 ```
 
-**Note**: This will also contain the  `neuraloperators` library implemented [here](https://github.com/neuraloperator/neuraloperator).
+**Note**: This will also contain the `neuraloperators` library implemented [here](https://github.com/neuraloperator/neuraloperator).
 
 ### Environment variables
 
@@ -39,17 +39,11 @@ Visit `notebooks/irregular_ns` for an example of how to load and visualize this 
 
 ## Running experiments
 
-This code assumes you have a Slurm-based environment and that you are either in an interactive job or will be launching a job. If this is not the case then you can still run the below code but you must ensure that `$SLURM_JOB_ID` is defined. For instance, in a non-Slurm environment you can simply set this to be any other unique identifier.
+Example:
 
-Experiments are launched by going into `exps` and running `main.sh` with the following arguments:
-
+```bash
+python train.py --savedir=outputs/exps/example --cfg=./conf/example_ns.json
 ```
-bash main.sh <experiment name> <path to json config> <n gpus>
-```
-
-`<experiment name>` means that the experiment will be saved to `$SAVE_DIR/<experiment name>/<slurm id>`. Example json config files are in `exps/json` and you can consult the full set of supported arguments in `train.py`. `<n gpus>` specifies how many GPUs to train on.
-
-For running experiments with `sbatch`, write a wrapper script which calls `main.sh` and specifies any required arguments.
 
 ### Generation
 

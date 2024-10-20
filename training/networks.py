@@ -928,11 +928,11 @@ class UNOBlock(torch.nn.Module):
 
         if up and down:
             raise ValueError("up and down cannot both be true at once")
-        output_scaling_factor = 1
-        if up:
-            output_scaling_factor = 2
-        if down:
-            output_scaling_factor = 0.5
+        # output_scaling_factor = 1
+        # if up:
+        #     output_scaling_factor = 2
+        # if down:
+        #     output_scaling_factor = 0.5
 
         if group_norm:
             self.norm0 = GroupNorm(num_channels=in_channels, eps=eps)
@@ -942,7 +942,7 @@ class UNOBlock(torch.nn.Module):
         self.conv0 = SpectralConv(
             in_channels=in_channels, 
             out_channels=out_channels, 
-            output_scaling_factor=output_scaling_factor,
+            # output_scaling_factor=output_scaling_factor,
             n_modes=n_modes,
             rank=rank,
             factorization='tucker'
@@ -972,7 +972,7 @@ class UNOBlock(torch.nn.Module):
         self.conv1 = SpectralConv(
             in_channels=out_channels, 
             out_channels=out_channels, 
-            output_scaling_factor=1,
+            # output_scaling_factor=1,
             n_modes=n_modes,
             rank=rank,
             factorization='tucker'
@@ -1008,6 +1008,7 @@ class UNOBlock(torch.nn.Module):
             self.proj = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=1, **init_zero)
 
     def forward(self, x, emb):
+
         orig = x
         
         x = self.conv0(silu(self.norm0(x)))
@@ -1028,26 +1029,3 @@ class UNOBlock(torch.nn.Module):
             x = x * self.skip_scale
         return x
 
-
-#----------------------------------------------------------------------------
-
-if __name__ == '__main__':
-
-    # Example of **block_kwargs:
-    # {'emb_channels': 256, 'num_heads': 1, 'dropout': 0.13, 'skip_scale': 0.7071067811865476, 'eps': 1e-06, 'resample_filter': [1, 1], 'resample_proj': True, 'adaptive_scale': False, 'init': {'init_mode': 'xavier_uniform'}, 'init_zero': {'init_mode': 'xavier_uniform', 'init_weight': 1e-05}, 'init_attn': {'init_mode': 'xavier_uniform', 'init_weight': 0.4472135954999579}}
-    
-
-    from neuralop.layers.fno_block import FNOBlocks
-
-    block = FNOBlocksAdain(
-        in_channels=8,
-        out_channels=16,
-        n_modes=(10,10),
-        output_scaling_factor=2,
-        n_layers=1,
-        emb_channels=16
-    ) 
-    emb = torch.randn((4,16))
-    xfake = torch.randn((4,8,32,32))
-    
-    print(block(xfake, emb).shape)
