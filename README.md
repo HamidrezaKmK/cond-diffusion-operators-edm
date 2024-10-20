@@ -4,34 +4,15 @@ This is the public code release of Christopher Beckham's internship at NVIDIA in
 
 ## Setup
 
-This repository is based on the EDM codebase and as such will have a similar set of requirements.  First create a conda environment. We will use the `environment.yml` file that is in the root directory of this repository. This is the same as the corresponding environment file in the original EDM repository from Karras et al located [here](https://github.com/NVlabs/edm).
+This repository is based on the EDM codebase and as such will have a similar set of requirements. First create a conda environment. We will use the `environment.yml` file that is in the root directory of this repository. This is the same as the corresponding environment file in the original EDM repository from Karras et al located [here](https://github.com/NVlabs/edm).
 
-To create an environment called `edm_fs` we do:
-
-```
-conda env create -n edm_fs -f environment.yml
-```
-
-Some dependencies may be flexible but PyTorch 1.12 is absolutely crucial (see [this issue](https://github.com/NVlabs/edm/issues/18)).
-
-### Dependencies
-
-We also need to install the `neuraloperators` library. For this repo we need to use my fork of it [here](https://github.com/christopher-beckham/neuraloperator). (Whoever builds on top of this repo may find it useful to see what has changed and try to reconsolidate it with the latest version of the library.)
-
-Clone it, switch to the `dev_refactor` branch and install it with the following steps:
+To create an environment called `edm_fs`, run:
 
 ```
-git clone git@github.com:christopher-beckham/neuraloperator.git
-cd neuraloperator
-git checkout dev_refactor
-pip install -e .
+conda env create -f environment.yml
 ```
 
-Note that you may also need to install other dependencies that are required by `neuraloperators`. Check their `requirements.txt` file. We need to also install:
- 
-- jstyleson: `pip install jstyleson`
-- torchvision: `pip install torchvision==0.13 --no-deps` (0.13 is compatible with PyTorch `1.12`, and you must specify no-deps so that it doesn't force installing PyTorch 2.0)
-- ffmpeg: `conda install -c conda-forge ffmpeg`
+**Note**: This will also contain the  `neuraloperators` library implemented [here](https://github.com/neuraloperator/neuraloperator).
 
 ### Environment variables
 
@@ -40,9 +21,10 @@ Also cd into `exps` and copy `cp env.sh.bak env.sh` and define the following env
 - `$SAVE_DIR`: some location where experiments are to be saved.
 - `$DATA_DIR`: this should be kept as is, since it points to the raw CWA/ERA dataset zarr file.
 
-### Dataset
+### Navier Stokes Dataset
 
-Since the climate dataset used for the internship is not (yet) public, we have to use an open source substitute. For this we use a 2D Navier-Stokes dataset which consists of trajectories in time. Concretely, the neural operator diffusion model is trained to model the following conditional distribution  `p(u_t | y_{t-k}, ..., y_{t+k})` where:
+We use a 2D Navier-Stokes dataset which consists of trajectories in time. Concretely, the neural operator diffusion model is trained to model the following conditional distribution `p(u_t | y_{t-k}, ..., y_{t+k})` where:
+
 - `u` is the function to model (whose samples are at a fixed discretisation which is defined by `resolution` in `training.datasets.NSDataset`, e.g. `128` for 128px on both spatial dimensions);
 - `y` are samples from the same function at a much coarser discretisation, and this is determined by `lowres_scale_factor` in `training.datasets.NSDataset`, i.e. if `lowres_scale_factor=0.0625` then this is a 16x reduction in spatial resolution).
 - `k` denotes the size of the context window.
@@ -53,24 +35,7 @@ Whatever `$DATA_DIR` is defined to, cd into that directory and download the data
 wget https://zenodo.org/records/7495555/files/2D_NS_Re40.npy
 ```
 
-### Visualising dataset
-
-We can visualise the dataset as a video. For example, if we define `y` to be a 16x reduction of the original resolution then we run the following:
-
-```
-python -m scripts.generate_frames_from_dataset \
-  --outdir=/tmp/dataset \
-  --dataset_kwargs '{"lowres_scale_factor": 0.0625}'
-cd /tmp/dataset
-ffmpeg -framerate 30 -pattern_type glob -i '*.png' \
-  -c:v libx264 -pix_fmt yuv420p out.mp4
-```
-
-Here is an example output (in gif format):
-
-![dataset viz](media/dataset.gif)
-
-Here, the `y` variable is actually 8x8 px (i.e. `128*0.0625 = 8`) but has been upsampled back up to 128px with bilinear resampling.
+Visit `notebooks/irregular_ns` for an example of how to load and visualize this dataset and make it irregular as well.
 
 ## Running experiments
 
@@ -99,6 +64,7 @@ bash generate_samples.sh \
 ```
 
 Respectively, these arguments correspond to:
+
 - The name of the experiment, _relative_ to `$SAVE_DIR`;
 - number of diffusion steps to perform (higher is better quality but takes longer);
 - length of the trajectory to generate;

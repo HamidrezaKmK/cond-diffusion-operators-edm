@@ -1,12 +1,13 @@
 import argparse
 import os
 import json
+
 import matplotlib
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 #from training.dataset_zarr import CwaEraDataset
-
+import dotenv
 import dnnlib
 
 def get_figure(u: torch.FloatTensor, y: torch.FloatTensor, idx: int, figsize=(8,4)):
@@ -24,7 +25,8 @@ def to_tf_format(x: torch.Tensor):
     return x.transpose(0,1).transpose(1,2)
 
 def run(args):
-
+    
+    dotenv.load_dotenv()
     if not os.path.exists(args.outdir):
         os.makedirs(args.outdir)
 
