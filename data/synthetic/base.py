@@ -62,19 +62,30 @@ class SpatioTemporalSlice(Dataset):
     """
     def __init__(
         self,
-        entire_simulation: np.ndarray,
+        entire_simulation: np.ndarray | str,
         spatial_window: Tuple | int,
         temporal_window: int,
         mask_sampler: Callable,
         total_count: int,
         dtype: torch.dtype = torch.float32,
     ):
+        # load the simulation
+        if isinstance(entire_simulation, str):
+            dotenv.load_dotenv(override=True)
+            entire_simulation = Path(os.getenv("DATA_PATH", "./outputs/data")) / entire_simulation
+            # check if the name ends with .npy and the file exists
+            if not entire_simulation.exists():
+                raise FileNotFoundError(f"File {entire_simulation} not found.")
+            if not entire_simulation.name.endswith(".npy"):
+                raise ValueError("Simulation file should be a numpy file.")
+            entire_simulation = np.load(entire_simulation)
+        self.entire_simulation = entire_simulation
+        
         # store the parameters
         self.spatial_window = (spatial_window,) if isinstance(spatial_window, int) else spatial_window
         self.temporal_window = temporal_window
         self.mask_sampler = mask_sampler
         self.total_count = total_count
-        self.entire_simulation = entire_simulation
         self.dtype = dtype 
 
         # load the simulations and check if the windows are valid, self.entire_simulation should have the shape [S, T, X1, X2, ...]   
@@ -125,14 +136,16 @@ class SpatioTemporalSlice(Dataset):
             spatial_corner.append(rng.integers(0, selected_simulation.shape[i + 1] - window_size))
         spatial_corner = tuple(spatial_corner)
         simulation_slice = selected_simulation[
-            temporal_index:temporal_index + self.temporal_window, 
-            *[slice(corner, corner + size) for corner, size in zip(spatial_corner, self.spatial_window)]
+            (
+                slice(temporal_index,temporal_index + self.temporal_window), 
+                *[slice(corner, corner + size) for corner, size in zip(spatial_corner, self.spatial_window)]
+            )
         ]
 
         # get the mask
         mask = self.mask_sampler((self.temporal_window, *self.spatial_window), seed=rng.integers(0, 128))
         all_coords = np.where(mask == 1)
-        simulated_values = torch.from_numpy(simulation_slice[*all_coords]).to(dtype=self.dtype)
-        all_coords = [torch.from_numpy(coords).to(dtype=self.dtype) for coords in all_coords]
+        simulated_values = torch.from_numpy(simulation_slice[tuple(all_coords)]).to(dtype=self.dtype)
+        all_coords = torch.stack([torch.from_numpy(coords).to(dtype=self.dtype) for coords in all_coords])
         
-        return all_coords[0], tuple(all_coords[1:]), simulated_values
+        return all_coords, simulated_values
