@@ -1,7 +1,6 @@
 import torch
 import torch.fft as fft
 import numpy as np
-import cv2
 import math
 import os
 
@@ -15,6 +14,22 @@ def get_fixed_coords(Ln1, Ln2):
 class NoiseSampler(object):
     def sample(self, N):
         raise NotImplementedError()
+
+# TODO: make this irregular
+class RBFIrregular(NoiseSampler):
+    
+    @torch.no_grad()
+    def __init__(
+        self, 
+        scale: float = 0.05,
+    ):
+        self.scale = scale
+        # TODO: implement this
+
+    @torch.no_grad()
+    def sample(self, N):
+        pass # TODO: implement this
+
 
 class RBFKernel(NoiseSampler):
     @torch.no_grad()

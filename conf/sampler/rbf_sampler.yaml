@@ -1,0 +1,2 @@
+_target_: training.noise_samplers.RBFIrregular
+scale: 0.05

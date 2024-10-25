@@ -1,5 +1,5 @@
 """Main training loop."""
-
+from typing import Callable, Dict, Any
 import os
 import time
 import copy
@@ -8,43 +8,71 @@ import pickle
 import psutil
 import numpy as np
 import torch
+from einops import rearrange
+from torchvision.utils import save_image
+
 import dnnlib
 from training.datasets.dataset import WindowedDataset
 from torch_utils import distributed as dist
 from torch_utils import training_stats
 from torch_utils import misc
-from torchvision.utils import save_image
-
-from einops import rearrange
+from training.noise_samplers import NoiseSampler
+from training.augment_pipe import AugmentPipe
 
 #----------------------------------------------------------------------------
 
 def training_loop(
-    run_dir             = '.',      # Output directory.
-    dataset_kwargs      = {},       # Options for training set.
-    data_loader_kwargs  = {},       # Options for torch.utils.data.DataLoader.
-    network_kwargs      = {},       # Options for model and preconditioning.
-    loss_kwargs         = {},       # Options for loss function.
-    sampler_kwargs      = {},       # Options for noise sampler.
-    optimizer_kwargs    = {},       # Options for optimizer.
-    augment_kwargs      = None,     # Options for augmentation pipeline, None = disable.
-    seed                = 0,        # Global random seed.
-    window_size         = 0,        # Number of examples per side of y_t
-    batch_size          = 512,      # Total batch size for one training iteration.
-    batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
-    total_kimg          = 200000,   # Training duration, measured in thousands of training images.
-    ema_halflife_kimg   = 500,      # Half-life of the exponential moving average (EMA) of model weights.
-    ema_rampup_ratio    = 0.05,     # EMA ramp-up coefficient, None = no rampup.
-    lr_rampup_kimg      = 10000,    # Learning rate ramp-up duration.
-    loss_scaling        = 1,        # Loss scaling factor for reducing FP16 under/overflows.
-    kimg_per_tick       = 50,       # Interval of progress prints.
-    snapshot_ticks      = 50,       # How often to save network snapshots, None = disable.
-    state_dump_ticks    = 500,      # How often to dump training state, None = disable.
-    resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
-    resume_state_dump   = None,     # Start from the given training state, None = reset training state.
-    resume_kimg         = 0,        # Start from the given training progress.
-    cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
-    device              = torch.device('cuda'),
+    run_dir,                       
+    # main arguments
+    dataset: torch.utils.data.Dataset,
+    data_loader_kwargs: Dict[str, Any],
+    loss_fn: Callable,
+    optim_partial: Callable[[torch.nn.Parameter], torch.optim.Optimizer],
+    sampler: NoiseSampler,
+    net: torch.nn.Module, 
+    augment_pipe: AugmentPipe,
+    # TODO: add typehint
+    seed: int,
+    base_learning_rate: float,
+    batch_size: int,
+    batch_gpu: int,
+    total_kimg: int,
+    ema_halflife_kimg,
+    ema_rampup_ratio,
+    lr_rampup_kimg,
+    loss_scaling,
+    kimg_per_tick,
+    snapshot_ticks,
+    state_dump_ticks,
+    resume_pkl,
+    resume_state_dump,
+    resume_kimg,
+    cudnn_benchmark,
+    device: torch.device,
+    # dataset_kwargs      = {},       # Options for training set.
+    # data_loader_kwargs  = {},       # Options for torch.utils.data.DataLoader.
+    # network_kwargs      = {},       # Options for model and preconditioning.
+    # loss_kwargs         = {},       # Options for loss function.
+    # sampler_kwargs      = {},       # Options for noise sampler.
+    # optimizer_kwargs    = {},       # Options for optimizer.
+    # augment_kwargs      = None,     # Options for augmentation pipeline, None = disable.
+    # seed                = 0,        # Global random seed.
+    # window_size         = 0,        # Number of examples per side of y_t
+    # batch_size          = 512,      # Total batch size for one training iteration.
+    # batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
+    # total_kimg          = 200000,   # Training duration, measured in thousands of training images.
+    # ema_halflife_kimg   = 500,      # Half-life of the exponential moving average (EMA) of model weights.
+    # ema_rampup_ratio    = 0.05,     # EMA ramp-up coefficient, None = no rampup.
+    # lr_rampup_kimg      = 10000,    # Learning rate ramp-up duration.
+    # loss_scaling        = 1,        # Loss scaling factor for reducing FP16 under/overflows.
+    # kimg_per_tick       = 50,       # Interval of progress prints.
+    # snapshot_ticks      = 50,       # How often to save network snapshots, None = disable.
+    # state_dump_ticks    = 500,      # How often to dump training state, None = disable.
+    # resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
+    # resume_state_dump   = None,     # Start from the given training state, None = reset training state.
+    # resume_kimg         = 0,        # Start from the given training progress.
+    # cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
+    # device              = torch.device('cuda'),
 ):
     # Initialize.
     start_time = time.time()
@@ -63,61 +91,42 @@ def training_loop(
     assert batch_size == batch_gpu * num_accumulation_rounds * dist.get_world_size()
 
     # Load dataset.
-    dist.print0('Loading dataset...')
-    dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # subclass of training.dataset.Dataset
-    dist.print0('Windowing dataset...')
-    dataset_obj = WindowedDataset(dataset_obj, window_size=window_size)
     dataset_sampler = misc.InfiniteSampler(
-        dataset=dataset_obj, 
+        dataset=dataset, 
         rank=dist.get_rank(), 
         num_replicas=dist.get_world_size(), 
         seed=seed
     )
     dataset_iterator = iter(
         torch.utils.data.DataLoader(
-            dataset=dataset_obj, 
+            dataset=dataset, 
             sampler=dataset_sampler, 
             batch_size=batch_gpu, 
-            **data_loader_kwargs
+            **data_loader_kwargs,
         )
     )
 
     # Construct network.
-    dist.print0('Constructing network...')
-    interface_kwargs = dict(
-        img_resolution=dataset_obj.resolution,
-        img_channels=dataset_obj.num_channels, 
-        label_dim=dataset_obj.label_dim
-    )
-    net = dnnlib.util.construct_class_by_name(**network_kwargs, **interface_kwargs) # subclass of torch.nn.Module
     net.train().requires_grad_(True).to(device)
-
+    
     dist.print0("Number of params: {}".format(misc.count_parameters(net)))
 
     # Print network statistics.
     if dist.get_rank() == 0:
         with torch.no_grad():
-            images = torch.zeros([batch_gpu, net.img_channels, net.img_resolution, net.img_resolution], device=device)
+            sample, _ = dataset[0]
+            num_coords = sample.shape[0]
+            input_coords = torch.zeros([batch_gpu, num_coords, 111], device=device)
+            input_values = torch.zeros([batch_gpu, 111], device=device)
             sigma = torch.ones([batch_gpu], device=device)
-            labels = torch.zeros([batch_gpu, net.label_dim, net.img_resolution, net.img_resolution], device=device)
-            misc.print_module_summary(net, [images, sigma, labels], max_nesting=2)
+            conditioning = torch.zeros([batch_gpu, num_coords, 111], device=device)
+            misc.print_module_summary(net, [input_coords, input_values, sigma, conditioning], max_nesting=2)
 
 
     # Setup optimizer.
     dist.print0('Setting up optimizer...')
 
-    # Kinda hacky but we need the loss_kwargs to get the sampler_fn
-    #print(sampler_kwargs, "<<<<<<<<<")
-    sampler_kwargs.n_in = dataset_obj.num_channels
-    # Have to specify `device` here since it is not serialisable
-    sampler_kwargs.device = device
-    loss_kwargs.sampler = dnnlib.util.construct_class_by_name(**sampler_kwargs)
-    
-    loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.loss.(VP|VE|EDM)Loss
-    optimizer = dnnlib.util.construct_class_by_name(
-        params=net.parameters(), 
-    **optimizer_kwargs) # subclass of torch.optim.Optimizer
-    augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs) if augment_kwargs is not None else None # training.augment.AugmentPipe
+    optimizer: torch.optim.Optimizer = optim_partial(net.parameters())
     ddp = torch.nn.parallel.DistributedDataParallel(
         net, 
         device_ids=[device], 
@@ -125,7 +134,7 @@ def training_loop(
         #find_unused_parameters=True
     )
     ema = copy.deepcopy(net).eval().requires_grad_(False)
-
+    breakpoint()
     # Resume training from previous snapshot.
     if resume_pkl is not None:
         dist.print0(f'Loading network weights from "{resume_pkl}"...')
@@ -157,7 +166,7 @@ def training_loop(
     maintenance_time = tick_start_time - start_time
     dist.update_progress(cur_nimg // 1000, total_kimg)
     stats_jsonl = None
-    first = True
+    
     while True:
 
         # Accumulate gradients.
@@ -172,27 +181,9 @@ def training_loop(
                 training_stats.report('Loss/loss', loss)
                 loss.sum().mul(loss_scaling / batch_gpu_total).backward()
 
-        if first:
-            # Dump some viz to disk.        
-            #save_image(
-            #    images[0:5]*0.5 + 0.5,
-            #    os.path.join(run_dir, "train_samples.png")
-            #)
-            if augment_pipe is not None:
-                torch.save(
-                    augment_pipe(images)[0][0:8].cpu()*0.5 + 0.5, 
-                    os.path.join(run_dir, "train_samples.pt")
-                )
-            else:
-                torch.save(
-                    images[0:8].cpu()*0.5 + 0.5, 
-                    os.path.join(run_dir, "train_samples.pt")
-                )
-            first = False
-
         # Update weights.
         for g in optimizer.param_groups:
-            g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
+            g['lr'] = base_learning_rate * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
         for param in net.parameters():
             if param.grad is not None:
                 training_stats.report("Loss/any_nan", torch.isnan(param.grad).any().item())

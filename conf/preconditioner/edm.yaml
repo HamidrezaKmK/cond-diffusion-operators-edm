@@ -1,0 +1,10 @@
+_target_: training.networks.neuraloperator.irregular.EDMPreconditioner
+_partial_: true
+rank: 1 # Rank of the EDM preconditioner.
+fmult: 1 # Factor to multiply the EDM preconditioner by.
+dropout: 0 # Dropout probability.
+num_blocks: 3 # Number of blocks in the model.
+use_fp16: False # Execute the underlying model at FP16 precision?
+sigma_min: 0 # Minimum supported noise level.
+sigma_max: 1000000000 # Maximum supported noise level.
+sigma_data: 0.5 # Expected standard deviation of the training data.

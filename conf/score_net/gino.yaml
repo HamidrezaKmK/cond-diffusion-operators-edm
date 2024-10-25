@@ -1,0 +1,3 @@
+_target_: training.networks.neuraloperator.irregular.GINOScoreNet
+num_coords: 3
+dropout: 0.05

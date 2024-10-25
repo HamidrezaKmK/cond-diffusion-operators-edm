@@ -13,3 +13,5 @@ slurm*.out
 
 # logs
 outputs/
+
+wandb/
