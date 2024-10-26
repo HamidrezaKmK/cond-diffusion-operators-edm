@@ -2,8 +2,8 @@ _target_: data.synthetic.SpatioTemporalSlice
 entire_simulation: 2D_NS_Re40.npy
 
 # the size of the sampled windows
-spatial_window: [32, 32]
-temporal_window: 16
+spatial_window: [8, 8]
+temporal_window: 8
 
 # sample a mask to make the data irregular
 mask_sampler:

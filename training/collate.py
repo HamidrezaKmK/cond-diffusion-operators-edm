@@ -23,10 +23,32 @@ class CompositeCollate(Collate):
             batch = collate_fn(batch)
         return batch
 
-class CollateIrregular(Collate):
+class CollateMesh(Collate):
+    """Collate function used for mesh data but with the assumption that even though the data is irregularly spaced, it is not heterogeneous."""
+    def __call__(self, batch):
+        # check if the entire batch has the same coordinates
+        all_intensities = []
+        all_conds = []
+        for i, (data, cond) in enumerate(batch):
+            coords, intensities = data
+            all_intensities.append(intensities)
+            all_conds.append(cond)
+            if i == 0:
+                ref_coords = coords
+            else:
+                if not torch.allclose(ref_coords, coords):
+                    raise ValueError("The coordinates are not the same for the entire batch.")
+        
+        return (
+            (ref_coords, torch.stack(all_intensities)),
+            torch.stack(all_conds) if all_conds[0] is not None else None,
+        )
+
+    
+class CollateResample(Collate):
     """Collate function used for irregular data."""
     
-    def __init__(self, strategy: Literal['padding', 'resample', 'nothing'] = 'resample', max_samples: int | None = None):
+    def __init__(self, strategy: Literal['padding', 'resample'] = 'resample', max_samples: int | None = None):
         self.strategy = strategy
         self.max_samples = max_samples
 
@@ -57,12 +79,7 @@ class CollateIrregular(Collate):
             data, cond = batch[i]
             coords, targets = data
             num_samples = len(targets)
-            if self.strategy == 'nothing':
-                # do nothing
-                all_conds.append(cond)
-                all_coords.append(coords)
-                all_samples.append(targets)
-            elif self.strategy == 'padding':
+            if self.strategy == 'padding':
                 # padd with resampled elements to match the maximum resolution
                 idx = torch.randint(num_samples, (max_samples - num_samples,))
                 all_conds.append(torch.cat([cond, cond[idx]]) if cond is not None else None)

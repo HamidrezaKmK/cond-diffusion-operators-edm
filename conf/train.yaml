@@ -1,12 +1,12 @@
 defaults:
-  - dataset: regional_ns_irregular
-  - score_net: gino
+  - dataset: regional_ns
+  - score_net: multipole
   - preconditioner: edm
   - noising_kernel: rbf_sampler
   - loss: edm_loss
   - optimizer: adam
   - augment_pipe: default
-  - collate: subsample
+  - collate: same_coords
   - wandb: enabled # set to disabled for local runs
   - _self_
 
@@ -18,8 +18,8 @@ dataloader_args:
 
 seed: 42 # Hitchhiker's Guide to the Galaxy
 base_learning_rate: 10e-4
-batch_size: 512
-batch_gpu: 512
+batch_size: 256
+batch_gpu: 256
 total_kimg: 200000
 ema_halflife_kimg: 500
 ema_rampup_ratio: 0.05

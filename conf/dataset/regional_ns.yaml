@@ -1,0 +1,11 @@
+_target_: data.synthetic.SpatioTemporalSlice
+entire_simulation: 2D_NS_Re40.npy
+
+# the size of the sampled windows
+spatial_window: [16, 16]
+temporal_window: 16
+
+# no masking
+mask_sampler: null
+
+total_count: 16

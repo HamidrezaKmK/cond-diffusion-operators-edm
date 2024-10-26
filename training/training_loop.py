@@ -93,12 +93,13 @@ def training_loop(
     # Print network statistics.
     if dist.get_rank() == 0:
         with torch.no_grad():
-            sample, _ = dataset[0]
-            num_coords = sample.shape[0]
-            input_coords = torch.zeros([batch_gpu, num_coords, 111], device=device)
-            input_values = torch.zeros([batch_gpu, 111], device=device)
+            x, conditioning = next(dataset_iterator)
+            input_coords, input_values = x
+            input_coords = input_coords.to(device).to(torch.float32)
+            input_values = input_values.to(device).to(torch.float32)
+            if conditioning is not None:
+                conditioning = conditioning.to(device).to(torch.float32)
             sigma = torch.ones([batch_gpu], device=device)
-            conditioning = torch.zeros([batch_gpu, num_coords, 111], device=device)
             misc.print_module_summary(net, [input_coords, input_values, sigma, conditioning], max_nesting=2)
 
 
@@ -110,7 +111,7 @@ def training_loop(
         net, 
         device_ids=[device], 
         broadcast_buffers=False,
-        find_unused_parameters=True # TODO: this should be commented out!
+        # find_unused_parameters=True # TODO: this should be commented out!
     )
     ema = copy.deepcopy(net).eval().requires_grad_(False)
 

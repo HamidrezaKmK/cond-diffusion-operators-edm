@@ -84,11 +84,14 @@ class EDMLoss(ScoreMatchingLoss):
         
         # get correlated Gaussian noise from the Gaussian random field and scale using the scheduler
         # multuply 
-        n = sigma[:, None] * self.noising_kernel.sample(coords)
+        if len(coords.shape) == 3:
+            n = sigma[:, None] * self.noising_kernel.sample(coords)
+        else:
+            n = sigma[:, None] * self.noising_kernel.sample(coords.unsqueeze(0).repeat(batch_size, 1, 1))
         denoised_samples = net(
-            coords,
-            samples_augmented + n,
-            sigma,
+            coords=coords,
+            samples=samples_augmented + n,
+            sigma=sigma,
             conditioning=conditioning,
             conditioning_augmented=conditioning_augmented,
         )

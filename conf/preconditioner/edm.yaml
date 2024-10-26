@@ -1,4 +1,4 @@
-_target_: training.networks.neuraloperator.irregular.EDMPreconditioner
+_target_: training.networks.neuraloperator.precond.EDMPreconditioner
 _partial_: true
 rank: 1 # Rank of the EDM preconditioner.
 fmult: 1 # Factor to multiply the EDM preconditioner by.

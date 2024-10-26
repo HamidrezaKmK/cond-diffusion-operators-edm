@@ -1,0 +1,3 @@
+[submodule "neuraloperator"]
+	path = neuraloperator
+	url = git@github.com:HamidrezaKmK/neuraloperator.git

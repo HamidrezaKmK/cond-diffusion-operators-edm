@@ -2,5 +2,4 @@
 _target_: training.collate.CompositeCollate
 collate_fns:
   - _target_: training.collate.MakeConditional # add a None for conditioning
-  - _target_: training.collate.CollateIrregular
-    strategy: nothing
+  - _target_: training.collate.CollateMesh

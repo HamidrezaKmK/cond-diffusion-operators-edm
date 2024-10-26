@@ -51,7 +51,7 @@ class SpatioTemporalSlice(Dataset):
         is an interval of that size, if it is 2D then it means that it is a rectangle with edges spatial_window[0] and spatial_window[1]
     temporal_window: int
         The size of the temporal window to sample from the data. It is an interval of that size.
-    mask_sampler: Callable
+    mask_sampler: Callable | None
         This should be a callable function that takes in a tuple `shape` and a `seed` and returns a binary numpy array
         with the same shape as `shape`. The mask_sampler is used to mask out values of the simulation to artificially
         make it irregular
@@ -65,7 +65,7 @@ class SpatioTemporalSlice(Dataset):
         entire_simulation: np.ndarray | str,
         spatial_window: Tuple | int,
         temporal_window: int,
-        mask_sampler: Callable,
+        mask_sampler: Callable | None,
         total_count: int,
         dtype: torch.dtype = torch.float32,
     ):
@@ -99,14 +99,15 @@ class SpatioTemporalSlice(Dataset):
         
 
         # inspect the mask_sampler to ensure that it takes in a shape and seed argument
-        if not callable(mask_sampler):
-            raise ValueError("mask_sampler must be a callable function.")
-        # inspect parameters of the mask_sampler
-        mask_sampler_shape = inspect.signature(mask_sampler)
-        if "shape" not in mask_sampler_shape.parameters:
-            raise ValueError("mask_sampler must have a shape argument.")
-        if "seed" not in mask_sampler_shape.parameters:
-            raise ValueError("mask_sampler must have a seed argument.")
+        if mask_sampler is not None:
+            if not callable(mask_sampler):
+                raise ValueError("mask_sampler must be a callable function.")
+            # inspect parameters of the mask_sampler
+            mask_sampler_shape = inspect.signature(mask_sampler)
+            if "shape" not in mask_sampler_shape.parameters:
+                raise ValueError("mask_sampler must have a shape argument.")
+            if "seed" not in mask_sampler_shape.parameters:
+                raise ValueError("mask_sampler must have a seed argument.")
     
     def __len__(self):
         return self.total_count
@@ -143,7 +144,10 @@ class SpatioTemporalSlice(Dataset):
         ]
 
         # get the mask
-        mask = self.mask_sampler((self.temporal_window, *self.spatial_window), seed=rng.integers(0, 128))
+        if self.mask_sampler is None:
+            mask = np.ones((self.temporal_window, *self.spatial_window))
+        else:
+            mask = self.mask_sampler((self.temporal_window, *self.spatial_window), seed=rng.integers(0, 128))
         all_coords = np.where(mask == 1)
         simulated_values = torch.from_numpy(simulation_slice[tuple(all_coords)]).to(dtype=self.dtype)
         all_coords = torch.stack([torch.from_numpy(coords).to(dtype=self.dtype) for coords in all_coords])

@@ -1,2 +1,4 @@
 from .uno import SongUNO
-from .irregular import EDMPreconditioner
+from .precond import EDMPreconditioner
+from .gino import GINOScoreNet
+from .multipole import MultiPoleScoreNet

@@ -7,34 +7,6 @@ from neuralop.layers.spectral_convolution import SpectralConv
 import dnnlib
 from neuralop.models import GINO
 
-class GINOScoreNet(torch.nn.Module):
-    """
-    A score network used for the diffusion denoising operator which has the backbone of GINO.
-    """
-    def __init__(
-        self,
-        num_coords,
-        dropout:int=0,
-    ):
-        super().__init__()
-        self.num_coords = num_coords
-        self._gino = GINO(
-            in_channels=num_coords,
-            out_channels=num_coords,
-            fno_channel_mlp_dropout=dropout,
-        )
-        self.dummy = nn.Parameter(torch.ones(1))
-    
-    def forward(
-        self, 
-        coords: torch.Tensor,
-        samples: torch.Tensor,
-        sigma: torch.Tensor,
-        conditioning: torch.Tensor | None = None,
-        conditioning_augmented: torch.Tensor | None = None,
-    ):
-        return samples * self.dummy
-    
 @persistence.persistent_class
 class EDMPreconditioner(torch.nn.Module):
     def __init__(self,
@@ -63,15 +35,16 @@ class EDMPreconditioner(torch.nn.Module):
         sigma: torch.Tensor,
         conditioning: torch.Tensor | None = None,
         conditioning_augmented: torch.Tensor | None = None,
+        **model_kwargs,
     ):
         # TODO: fix this
-        return self.model(
-            coords=coords,
-            samples=samples,
-            sigma=sigma,
-            conditioning=conditioning,
-            conditioning_augmented=conditioning_augmented,
-        )
+        # return self.model(
+        #     coords=coords,
+        #     samples=samples,
+        #     sigma=sigma,
+        #     conditioning=conditioning,
+        #     conditioning_augmented=conditioning_augmented,
+        # )
     
         # x = x.to(torch.float32)
         # sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
@@ -82,16 +55,24 @@ class EDMPreconditioner(torch.nn.Module):
         #     else class_labels.to(torch.float32) #.reshape(-1, self.label_dim)
         
         # dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
+        dtype = torch.float32
 
-        # c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-        # c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
-        # c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
-        # c_noise = sigma.log() / 4
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
+        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
+        c_noise = sigma.log() / 4
 
-        # F_x = self.model((c_in * x).to(dtype), c_noise.flatten(), class_labels=class_labels, **model_kwargs)
-        # assert F_x.dtype == dtype
-        # D_x = c_skip * x + c_out * F_x.to(torch.float32)
-        # return D_x
+        F_x = self.model(
+            coords=coords,
+            samples=(c_in[:, None] * samples).to(dtype),
+            sigma=c_noise,
+            conditioning=conditioning,
+            conditioning_augmented=conditioning_augmented,
+            **model_kwargs,
+        )
+        assert F_x.dtype == dtype
+        D_x = c_skip[:, None] * samples + c_out[:, None] * F_x.to(dtype)
+        return D_x
 
     def round_sigma(self, sigma):
         return torch.as_tensor(sigma)
