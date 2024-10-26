@@ -27,7 +27,9 @@ class RBFIrregular(NoisingKernel):
         coords = coords.permute(0, 2, 1)
         batch_size, K, dim = coords.shape
         # if the coordinates are the same as before, no need to recompute the cholesky
-        if self._last_coords is not None and torch.allclose(self._last_coords, coords - coords[0, 0]):
+        if self._last_coords is not None and \
+            self._last_coords.shape == coords[0].shape and \
+            torch.allclose(self._last_coords, coords - coords[0, 0]):
             L = self._L
         else:
             self._last_coords = coords - coords[0, 0]

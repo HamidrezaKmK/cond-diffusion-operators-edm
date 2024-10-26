@@ -53,6 +53,7 @@ class MultiPoleScoreNet(torch.nn.Module):
         self.fc_lifting = nn.Linear(num_channels, latent_channels) # encoder
         self.fc_projection = nn.Linear(latent_channels, num_channels) # decoder
 
+        use_open3d_neighbor_search = True if coord_dim == 3 else False
         for l in range(self.num_levels + 1):
             # Skip Kernels
             self.register_module(
@@ -62,6 +63,7 @@ class MultiPoleScoreNet(torch.nn.Module):
                     out_channels=latent_channels,
                     coord_dim=coord_dim,
                     radius=self.radii[l],
+                    use_open3d_neighbor_search=use_open3d_neighbor_search
                 )
             )
             # Direct Affine Operators
@@ -77,7 +79,8 @@ class MultiPoleScoreNet(torch.nn.Module):
                         in_channels=latent_channels,
                         out_channels=latent_channels,
                         coord_dim=coord_dim,
-                        radius=max(self.radii[l], self.radii[l + 1])
+                        radius=max(self.radii[l], self.radii[l + 1]),
+                        use_open3d_neighbor_search=use_open3d_neighbor_search,
                     )
                 )
                 # Upsampling Kernels
@@ -88,6 +91,7 @@ class MultiPoleScoreNet(torch.nn.Module):
                         out_channels=latent_channels,
                         coord_dim=coord_dim,
                         radius=max(self.radii[l], self.radii[l + 1]), # TODO: not sure about the radius here
+                        use_open3d_neighbor_search=use_open3d_neighbor_search,
                     )
                 )
     
@@ -103,12 +107,12 @@ class MultiPoleScoreNet(torch.nn.Module):
             raise ValueError("coords must be of shape (dim, num_samples)")
         
         # subsample the coordinates across the depth for the v-cycle, each level will have half as many coordinates
-        coord_across_depths = [coords]
-        for i in range(1, self.num_levels):
-            coord_across_depths.append(coords[:, ::(1 << i)]) # TODO: is this a GPU access nightmare?
-        
+        coord_across_depths = [coords.permute(1, 0)] # (num_samples, dim)
+        for l in range(1, self.num_levels + 1):
+            coord_across_depths.append(coords[:, ::(1 << l)].permute(1, 0)) # TODO: is this a GPU access nightmare?
+
         # uplift everything to a latent space that will be projected down at the end
-        uplifted = self.fc_lifting(samples.unsqueeze(-1)) # (batch_size, num_samples, latent_channels)
+        uplifted = self.fc_lifting(samples) # (batch_size, num_samples, latent_channels)
 
         # coords_across_depths[d] will indicate the coordinates at depth d
         current_v_up = [uplifted] + [None] * self.num_levels
@@ -131,7 +135,10 @@ class MultiPoleScoreNet(torch.nn.Module):
             # (2) the upward pass going from num_levels to 0 (course-grained to fine-grained)
             current_v_up[self.num_levels] = F.relu(
                 self.get_submodule(f"W_{self.num_levels}")(current_v_down[self.num_levels]) + \
-                self.get_submodule(f"GK_{self.num_levels}_{self.num_levels}")(current_v_down[self.num_levels])
+                self.get_submodule(f"GK_{self.num_levels}_{self.num_levels}")(
+                    x=coord_across_depths[self.num_levels],
+                    y=coord_across_depths[self.num_levels],
+                    f_y=current_v_down[self.num_levels]),
             )
             for l in range(self.num_levels - 1, -1, -1):
                 # upsample
@@ -142,7 +149,11 @@ class MultiPoleScoreNet(torch.nn.Module):
                 )
                 v_upsampled = v_upsampled + (
                     self.get_submodule(f"W_{l}")(current_v_down[l]) + \
-                    self.get_submodule(f"GK_{l}_{l}")(current_v_down[l])
+                    self.get_submodule(f"GK_{l}_{l}")(
+                        x=coord_across_depths[l],
+                        y=coord_across_depths[l],
+                        f_y=current_v_down[l],
+                    )
                 )
                 current_v_up[l] = F.relu(v_upsampled)
         
