@@ -37,7 +37,7 @@ class EDMPreconditioner(torch.nn.Module):
         conditioning_augmented: torch.Tensor | None = None,
         **model_kwargs,
     ):
-        # TODO: fix this
+        # TODO: make sure this is correct! 
         # return self.model(
         #     coords=coords,
         #     samples=samples,
@@ -49,7 +49,6 @@ class EDMPreconditioner(torch.nn.Module):
         # x = x.to(torch.float32)
         # sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
 
-        # # TODO
         # class_labels = None if self.label_dim == 0 else \
         #     torch.zeros([1, self.label_dim], device=x.device) if class_labels is None \
         #     else class_labels.to(torch.float32) #.reshape(-1, self.label_dim)
