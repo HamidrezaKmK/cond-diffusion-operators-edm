@@ -1,0 +1,2 @@
+_target_: training.noising_kernels.RBFIrregular
+scale: 0.05

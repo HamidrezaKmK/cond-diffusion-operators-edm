@@ -2,10 +2,11 @@ defaults:
   - dataset: regional_ns_irregular
   - score_net: gino
   - preconditioner: edm
-  - sampler: rbf_sampler
+  - noising_kernel: rbf_sampler
   - loss: edm_loss
   - optimizer: adam
   - augment_pipe: default
+  - collate: subsample
   - wandb: enabled # set to disabled for local runs
   - _self_
 

@@ -8,16 +8,17 @@ import pickle
 import psutil
 import numpy as np
 import torch
-from einops import rearrange
-from torchvision.utils import save_image
+import wandb
 
 import dnnlib
 from training.datasets.dataset import WindowedDataset
 from torch_utils import distributed as dist
 from torch_utils import training_stats
 from torch_utils import misc
-from training.noise_samplers import NoiseSampler
+from training.noising_kernels import NoisingKernel
 from training.augment_pipe import AugmentPipe
+from training.collate import Collate
+from training.loss import ScoreMatchingLoss
 
 #----------------------------------------------------------------------------
 
@@ -26,12 +27,13 @@ def training_loop(
     # main arguments
     dataset: torch.utils.data.Dataset,
     data_loader_kwargs: Dict[str, Any],
-    loss_fn: Callable,
+    loss_fn: ScoreMatchingLoss,
     optim_partial: Callable[[torch.nn.Parameter], torch.optim.Optimizer],
-    sampler: NoiseSampler,
     net: torch.nn.Module, 
     augment_pipe: AugmentPipe,
+    collate_fn: Collate,
     # TODO: add typehint
+    wandb_enabled: bool,
     seed: int,
     base_learning_rate: float,
     batch_size: int,
@@ -49,30 +51,6 @@ def training_loop(
     resume_kimg,
     cudnn_benchmark,
     device: torch.device,
-    # dataset_kwargs      = {},       # Options for training set.
-    # data_loader_kwargs  = {},       # Options for torch.utils.data.DataLoader.
-    # network_kwargs      = {},       # Options for model and preconditioning.
-    # loss_kwargs         = {},       # Options for loss function.
-    # sampler_kwargs      = {},       # Options for noise sampler.
-    # optimizer_kwargs    = {},       # Options for optimizer.
-    # augment_kwargs      = None,     # Options for augmentation pipeline, None = disable.
-    # seed                = 0,        # Global random seed.
-    # window_size         = 0,        # Number of examples per side of y_t
-    # batch_size          = 512,      # Total batch size for one training iteration.
-    # batch_gpu           = None,     # Limit batch size per GPU, None = no limit.
-    # total_kimg          = 200000,   # Training duration, measured in thousands of training images.
-    # ema_halflife_kimg   = 500,      # Half-life of the exponential moving average (EMA) of model weights.
-    # ema_rampup_ratio    = 0.05,     # EMA ramp-up coefficient, None = no rampup.
-    # lr_rampup_kimg      = 10000,    # Learning rate ramp-up duration.
-    # loss_scaling        = 1,        # Loss scaling factor for reducing FP16 under/overflows.
-    # kimg_per_tick       = 50,       # Interval of progress prints.
-    # snapshot_ticks      = 50,       # How often to save network snapshots, None = disable.
-    # state_dump_ticks    = 500,      # How often to dump training state, None = disable.
-    # resume_pkl          = None,     # Start from the given network snapshot, None = random initialization.
-    # resume_state_dump   = None,     # Start from the given training state, None = reset training state.
-    # resume_kimg         = 0,        # Start from the given training progress.
-    # cudnn_benchmark     = True,     # Enable torch.backends.cudnn.benchmark?
-    # device              = torch.device('cuda'),
 ):
     # Initialize.
     start_time = time.time()
@@ -102,6 +80,7 @@ def training_loop(
             dataset=dataset, 
             sampler=dataset_sampler, 
             batch_size=batch_gpu, 
+            collate_fn=collate_fn,
             **data_loader_kwargs,
         )
     )
@@ -131,10 +110,10 @@ def training_loop(
         net, 
         device_ids=[device], 
         broadcast_buffers=False,
-        #find_unused_parameters=True
+        find_unused_parameters=True # TODO: this should be commented out!
     )
     ema = copy.deepcopy(net).eval().requires_grad_(False)
-    breakpoint()
+
     # Resume training from previous snapshot.
     if resume_pkl is not None:
         dist.print0(f'Loading network weights from "{resume_pkl}"...')
@@ -173,13 +152,24 @@ def training_loop(
         optimizer.zero_grad(set_to_none=True)
         for round_idx in range(num_accumulation_rounds):
             with misc.ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
-                images, labels = next(dataset_iterator)
-                labels = rearrange(labels, 'bs ws nc h w -> bs (ws nc) h w')
-                images = images.to(device).to(torch.float32) #/ 127.5 - 1
-                labels = labels.to(device)
-                loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
+                data, conditioning = next(dataset_iterator)
+                coords, samples = data
+                coords = coords.to(device).to(torch.float32)
+                samples = samples.to(device).to(torch.float32)
+                if conditioning is not None:
+                    conditioning = conditioning.to(device).to(torch.float32)
+                loss = loss_fn(
+                    net=ddp, 
+                    coords=coords,
+                    samples=samples,
+                    conditioning=conditioning,
+                    augment_pipe=augment_pipe,
+                )
                 training_stats.report('Loss/loss', loss)
-                loss.sum().mul(loss_scaling / batch_gpu_total).backward()
+                loss_value = loss.sum().mul(loss_scaling / batch_gpu_total)
+                if wandb_enabled:
+                    wandb.log({"loss": loss_value.item()})
+                loss_value.backward()
 
         # Update weights.
         for g in optimizer.param_groups:
@@ -188,6 +178,7 @@ def training_loop(
             if param.grad is not None:
                 training_stats.report("Loss/any_nan", torch.isnan(param.grad).any().item())
                 torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
+        
         optimizer.step()
 
         # Update EMA.
@@ -272,11 +263,9 @@ def training_loop(
         # Chris B: I don't want to deal with this in my code yet
         #if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
         #    torch.save(dict(net=net, optimizer_state=optimizer.state_dict()), os.path.#join(run_dir, f'training-state-{cur_nimg//1000:06d}.pt'))
-
         # Update logs.
         training_stats.default_collector.update()
         dist.update_progress(cur_nimg // 1000, total_kimg)
-
         # Update state.
         cur_tick += 1
         tick_start_nimg = cur_nimg

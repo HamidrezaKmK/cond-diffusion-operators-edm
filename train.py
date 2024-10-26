@@ -52,8 +52,9 @@ def main(cfg: DictConfig):
     optim_partial = instantiate(cfg.optimizer)
     score_net = instantiate(cfg.score_net)
     preconditioned_net = instantiate(cfg.preconditioner)(score_net=score_net)
-    sampler = instantiate(cfg.sampler)
-    loss_fn = instantiate(cfg.loss)(sampler=sampler)
+    noising_kernel = instantiate(cfg.noising_kernel)
+    loss_fn = instantiate(cfg.loss)(noising_kernel=noising_kernel)
+    collate_fn = instantiate(cfg.collate)
 
     # Random seed.
     if cfg.seed is None:
@@ -106,10 +107,11 @@ def main(cfg: DictConfig):
         data_loader_kwargs=OmegaConf.to_container(cfg.dataloader_args),
         loss_fn=loss_fn,
         optim_partial=optim_partial,
-        sampler=sampler,
         net=preconditioned_net,
         augment_pipe=augment_pipe,
+        collate_fn=collate_fn,
         # 
+        wandb_enabled=cfg.wandb.enabled,
         seed=cfg.seed,
         base_learning_rate=cfg.base_learning_rate,
         batch_size=cfg.batch_size,

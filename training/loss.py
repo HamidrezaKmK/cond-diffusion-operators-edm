@@ -3,104 +3,94 @@
 
 import torch
 from torch_utils import persistence
+from abc import ABC, abstractmethod
 
-#----------------------------------------------------------------------------
-# Loss function corresponding to the variance preserving (VP) formulation
-# from the paper "Score-Based Generative Modeling through Stochastic
-# Differential Equations".
+from training.augment_pipe import AugmentPipe
+from training.noising_kernels import NoisingKernel
 
-@persistence.persistent_class
-class VPLoss:
-    def __init__(self, beta_d=19.9, beta_min=0.1, epsilon_t=1e-5):
-        self.beta_d = beta_d
-        self.beta_min = beta_min
-        self.epsilon_t = epsilon_t
-
-    def __call__(self, net, images, labels, augment_pipe=None):
-        rnd_uniform = torch.rand([images.shape[0], 1, 1, 1], device=images.device)
-        sigma = self.sigma(1 + rnd_uniform * (self.epsilon_t - 1))
-        weight = 1 / sigma ** 2
-        y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)
-        n = torch.randn_like(y) * sigma
-        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
-        loss = weight * ((D_yn - y) ** 2)
-        return loss
-
-    def sigma(self, t):
-        t = torch.as_tensor(t)
-        return ((0.5 * self.beta_d * (t ** 2) + self.beta_min * t).exp() - 1).sqrt()
-
-#----------------------------------------------------------------------------
-# Loss function corresponding to the variance exploding (VE) formulation
-# from the paper "Score-Based Generative Modeling through Stochastic
-# Differential Equations".
-
-@persistence.persistent_class
-class VELoss:
-    def __init__(self, sigma_min=0.02, sigma_max=100):
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-
-    def __call__(self, net, images, labels, augment_pipe=None):
-        rnd_uniform = torch.rand([images.shape[0], 1, 1, 1], device=images.device)
-        sigma = self.sigma_min * ((self.sigma_max / self.sigma_min) ** rnd_uniform)
-        weight = 1 / sigma ** 2
-        y, augment_labels = augment_pipe(images) if augment_pipe is not None else (images, None)
-        n = torch.randn_like(y) * sigma
-        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
-        loss = weight * ((D_yn - y) ** 2)
-        return loss
-
+class ScoreMatchingLoss(ABC):
+    """Abstract base class for loss functions."""
+    @abstractmethod
+    def __call__(
+        self, 
+        net: torch.nn.Module, 
+        coords: torch.Tensor, 
+        samples: torch.Tensor, 
+        conditioning: torch.Tensor | None = None, 
+        augment_pipe: AugmentPipe | None = None,
+    ):
+        raise NotImplementedError   
+    
 #----------------------------------------------------------------------------
 # Improved loss function proposed in the paper "Elucidating the Design Space
 # of Diffusion-Based Generative Models" (EDM).
 
 @persistence.persistent_class
-class EDMLoss:
-    def __init__(self, sampler, P_mean=-1.2, P_std=1.2, sigma_data=0.5):
-        self.sampler = sampler
+class EDMLoss(ScoreMatchingLoss):
+    def __init__(
+        self, 
+        noising_kernel: NoisingKernel,
+        P_mean: float = -1.2, 
+        P_std: float = 1.2, 
+        sigma_data: float = 0.5,
+    ):
+        self.noising_kernel = noising_kernel
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-    def __call__(self, net, images, labels=None, augment_pipe=None):
+    def __call__(
+        self, 
+        net: torch.nn.Module, 
+        coords: torch.Tensor, 
+        samples: torch.Tensor, 
+        conditioning: torch.Tensor | None = None, 
+        augment_pipe: AugmentPipe | None = None,
+    ):
+        """
+        Compute the denoising score matching loss.
 
-        rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)        
+        Args:
+            net: The denoising diffusion model.
+            coords: The coordinates of the samples.
+            samples: The value of the samples.
+            conditioning: 
+                Conditioning samples; this is for example used for imputation and should either be 
+                non-existent or have the same size and shape as the original samples.
+            augment_pipe:
+                The augmentation pipeline used to augment the samples and conditioning.
+        Returns:
+            The loss value.
+        """
+        # get the noise scheduler and the loss weight   
+        batch_size = samples.shape[0]  
+        rnd_normal = torch.randn(batch_size).to(dtype=samples.dtype).to(device=samples.device) # (related to timestep)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
+        loss_weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
 
-        # We want to augment pipe both x and y at once.
-        x_dim = images.size(1)
-        all_images = torch.cat((images, labels), dim=1)
-        all_images_augmented, augment_labels = augment_pipe(all_images) if augment_pipe is not None else (images, None)
-        # Extract out the x and y components
-        y = all_images[:, 0:x_dim]
-        labels = all_images[:,  x_dim::]
+        # We want to augment pipe both input and conditioning at once.
         
-        #n = torch.randn_like(y) * sigma
-        n = self.sampler.sample(y.size(0)) * sigma
+        x_dim = samples.shape[1]
+        if conditioning:
+            _samples = torch.cat((samples, conditioning), dim=1)
+            # repeat coordinates along the second axis
+            _coords = coords.repeat(1, 2)
+            _augmented_samples = augment_pipe(_coords, _samples)
+            samples_augmented = _augmented_samples[:, :x_dim]
+            conditioning_augmented = _augmented_samples[:, x_dim:]
+        else:
+            conditioning_augmented = None
+            samples_augmented = augment_pipe(coords, samples)
         
-        D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
-        loss = weight * ((D_yn - y) ** 2)
-        return loss
-
-#----------------------------------------------------------------------------
-
-@persistence.persistent_class
-class ReconLoss:
-    def __init__(self, *args, **kwargs):
-        pass
-    def __call__(self, net, images, labels=None, augment_pipe=None):
-        # We want to augment pipe both x and y at once.
-        x_dim = images.size(1)
-        all_images = torch.cat((images, labels), dim=1)
-        all_images_augmented, augment_labels = augment_pipe(all_images) \
-            if augment_pipe is not None else (images, None)
-        # Extract out the x and y components
-        y = all_images[:, 0:x_dim]
-        labels = all_images[:,  x_dim::]        
-        sigma = torch.zeros((y.size(0), )).to(y.device)+1
-        D_y = net(y, sigma, labels, augment_labels=augment_labels)
-        
-        loss = ((D_y - y) ** 2)
-        return loss
+        # get correlated Gaussian noise from the Gaussian random field and scale using the scheduler
+        # multuply 
+        n = sigma[:, None] * self.noising_kernel.sample(coords)
+        denoised_samples = net(
+            coords,
+            samples_augmented + n,
+            sigma,
+            conditioning=conditioning,
+            conditioning_augmented=conditioning_augmented,
+        )
+        return loss_weight[:, None] * (denoised_samples - samples_augmented) ** 2
+    

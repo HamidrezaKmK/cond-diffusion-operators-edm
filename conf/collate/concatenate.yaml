@@ -1,0 +1,6 @@
+# Do nothing but concatenate the regions
+_target_: training.collate.CompositeCollate
+collate_fns:
+  - _target_: training.collate.MakeConditional # add a None for conditioning
+  - _target_: training.collate.CollateIrregular
+    strategy: nothing

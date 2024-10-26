@@ -23,9 +23,17 @@ class GINOScoreNet(torch.nn.Module):
             out_channels=num_coords,
             fno_channel_mlp_dropout=dropout,
         )
+        self.dummy = nn.Parameter(torch.ones(1))
     
-    def forward(self, x, class_labels=None):
-        return self._gino(x, class_labels)
+    def forward(
+        self, 
+        coords: torch.Tensor,
+        samples: torch.Tensor,
+        sigma: torch.Tensor,
+        conditioning: torch.Tensor | None = None,
+        conditioning_augmented: torch.Tensor | None = None,
+    ):
+        return samples * self.dummy
     
 @persistence.persistent_class
 class EDMPreconditioner(torch.nn.Module):
@@ -48,8 +56,42 @@ class EDMPreconditioner(torch.nn.Module):
         self.sigma_data = sigma_data
         self.num_blocks = num_blocks
 
-    def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
-        pass
+    def forward(
+        self, 
+        coords: torch.Tensor,
+        samples: torch.Tensor,
+        sigma: torch.Tensor,
+        conditioning: torch.Tensor | None = None,
+        conditioning_augmented: torch.Tensor | None = None,
+    ):
+        # TODO: fix this
+        return self.model(
+            coords=coords,
+            samples=samples,
+            sigma=sigma,
+            conditioning=conditioning,
+            conditioning_augmented=conditioning_augmented,
+        )
+    
+        # x = x.to(torch.float32)
+        # sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
+
+        # # TODO
+        # class_labels = None if self.label_dim == 0 else \
+        #     torch.zeros([1, self.label_dim], device=x.device) if class_labels is None \
+        #     else class_labels.to(torch.float32) #.reshape(-1, self.label_dim)
+        
+        # dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
+
+        # c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        # c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
+        # c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
+        # c_noise = sigma.log() / 4
+
+        # F_x = self.model((c_in * x).to(dtype), c_noise.flatten(), class_labels=class_labels, **model_kwargs)
+        # assert F_x.dtype == dtype
+        # D_x = c_skip * x + c_out * F_x.to(torch.float32)
+        # return D_x
 
     def round_sigma(self, sigma):
         return torch.as_tensor(sigma)

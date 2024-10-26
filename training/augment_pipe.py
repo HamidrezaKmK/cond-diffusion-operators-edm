@@ -1,8 +1,6 @@
 
 class AugmentPipe:
 
-    def __init__(self):
-        pass
-
-    def __call__(self, x):
-        return x
+    def __call__(self, coords, samples):
+        # TODO: add augmentation
+        return samples
