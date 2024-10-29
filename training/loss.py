@@ -96,4 +96,148 @@ class EDMLoss(ScoreMatchingLoss):
             conditioning_augmented=conditioning_augmented,
         )
         return loss_weight[:, None] * (denoised_samples - samples_augmented) ** 2
+
     
+@persistence.persistent_class
+class SimpleLoss(ScoreMatchingLoss):
+    def __init__(
+        self, 
+        noising_kernel: NoisingKernel,
+        sigma_min: float = 0.002,
+        sigma_max: float = 80,
+    ):
+        self.noising_kernel = noising_kernel
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
+    def __call__(
+        self, 
+        net: torch.nn.Module, 
+        coords: torch.Tensor, 
+        samples: torch.Tensor, 
+        conditioning: torch.Tensor | None = None, 
+        augment_pipe: AugmentPipe | None = None,
+    ):
+        """
+        Compute the denoising score matching loss.
+
+        Args:
+            net: The denoising diffusion model.
+            coords: The coordinates of the samples.
+            samples: The value of the samples.
+            conditioning: 
+                Conditioning samples; this is for example used for imputation and should either be 
+                non-existent or have the same size and shape as the original samples.
+            augment_pipe:
+                The augmentation pipeline used to augment the samples and conditioning.
+        Returns:
+            The loss value.
+        """
+        # get the noise scheduler and the loss weight   
+        batch_size = samples.shape[0]  
+        rnd_uniform = torch.rand(batch_size).to(dtype=samples.dtype).to(device=samples.device) 
+        sigma = self.sigma_min + rnd_uniform * (self.sigma_max - self.sigma_min) # pick a uniform timestep and its associated noise
+        loss_weight = 1 / sigma ** 2
+
+        # We want to augment pipe both input and conditioning at once.
+        x_dim = samples.shape[1]
+        if conditioning:
+            _samples = torch.cat((samples, conditioning), dim=1)
+            # repeat coordinates along the second axis
+            _coords = coords.repeat(1, 2)
+            _augmented_samples = augment_pipe(_coords, _samples)
+            samples_augmented = _augmented_samples[:, :x_dim]
+            conditioning_augmented = _augmented_samples[:, x_dim:]
+        else:
+            conditioning_augmented = None
+            samples_augmented = augment_pipe(coords, samples)
+        
+        # get correlated Gaussian noise from the Gaussian random field and scale using the scheduler
+        # multuply 
+        if len(coords.shape) == 3:
+            n = sigma[:, None] * self.noising_kernel.sample(coords)
+        else:
+            n = sigma[:, None] * self.noising_kernel.sample(coords.unsqueeze(0).repeat(batch_size, 1, 1))
+        denoised_samples = net(
+            coords=coords,
+            samples=samples_augmented + n,
+            sigma=sigma,
+            conditioning=conditioning,
+            conditioning_augmented=conditioning_augmented,
+        )
+        return loss_weight[:, None] * (denoised_samples - samples_augmented) ** 2
+
+@persistence.persistent_class
+class VPLoss:
+    def __init__(
+        self, 
+        noising_kernel: NoisingKernel,
+        beta_d=19.9, 
+        beta_min=0.1, 
+        epsilon_t=1e-5,
+    ):
+        self.noising_kernel = noising_kernel
+        self.beta_d = beta_d
+        self.beta_min = beta_min
+        self.epsilon_t = epsilon_t
+    
+    def __call__(
+        self, 
+        net: torch.nn.Module, 
+        coords: torch.Tensor, 
+        samples: torch.Tensor, 
+        conditioning: torch.Tensor | None = None, 
+        augment_pipe: AugmentPipe | None = None,
+    ):
+        """
+        Compute the denoising score matching loss.
+
+        Args:
+            net: The denoising diffusion model.
+            coords: The coordinates of the samples.
+            samples: The value of the samples.
+            conditioning: 
+                Conditioning samples; this is for example used for imputation and should either be 
+                non-existent or have the same size and shape as the original samples.
+            augment_pipe:
+                The augmentation pipeline used to augment the samples and conditioning.
+        Returns:
+            The loss value.
+        """
+        # get the noise scheduler and the loss weight   
+        batch_size = samples.shape[0]  
+        rnd_uniform = torch.rand(batch_size).to(dtype=samples.dtype).to(device=samples.device) 
+        sigma = self.sigma(1 + rnd_uniform * (self.epsilon_t - 1))
+        loss_weight = 1 / sigma ** 2
+
+        # We want to augment pipe both input and conditioning at once.
+        x_dim = samples.shape[1]
+        if conditioning:
+            _samples = torch.cat((samples, conditioning), dim=1)
+            # repeat coordinates along the second axis
+            _coords = coords.repeat(1, 2)
+            _augmented_samples = augment_pipe(_coords, _samples)
+            samples_augmented = _augmented_samples[:, :x_dim]
+            conditioning_augmented = _augmented_samples[:, x_dim:]
+        else:
+            conditioning_augmented = None
+            samples_augmented = augment_pipe(coords, samples)
+        
+        # get correlated Gaussian noise from the Gaussian random field and scale using the scheduler
+        # multuply 
+        if len(coords.shape) == 3:
+            n = sigma[:, None] * self.noising_kernel.sample(coords)
+        else:
+            n = sigma[:, None] * self.noising_kernel.sample(coords.unsqueeze(0).repeat(batch_size, 1, 1))
+        denoised_samples = net(
+            coords=coords,
+            samples=samples_augmented + n,
+            sigma=sigma,
+            conditioning=conditioning,
+            conditioning_augmented=conditioning_augmented,
+        )
+        return loss_weight[:, None] * (denoised_samples - samples_augmented) ** 2
+
+    def sigma(self, t):
+        t = torch.as_tensor(t)
+        return ((0.5 * self.beta_d * (t ** 2) + self.beta_min * t).exp() - 1).sqrt()

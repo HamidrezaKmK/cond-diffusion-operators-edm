@@ -4,7 +4,7 @@ from neuralop.models import GINO
 
 class GINOScoreNet(torch.nn.Module):
     """
-    A score network used for the diffusion denoising operator which has the backbone of GINO.
+    A score operator used for the diffusion denoising operator which has the backbone of GINO.
     """
     def __init__(
         self,
