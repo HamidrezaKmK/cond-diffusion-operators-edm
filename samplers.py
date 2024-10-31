@@ -7,6 +7,8 @@ from typing import Any
 import torch
 from tqdm import tqdm
 
+from training.noising_kernels import NoisingKernel
+
 class BaseSampler(ABC):
     @abstractmethod
     def __call__(self):
@@ -70,38 +72,64 @@ class EDMSampler(BaseSampler):
         return x_next
 
 
-class EulerSampler(ABC):
-    # TODO: fix!
+class ImputationEDMSampler(ABC):
+    """
+    A sampler that also performs imputation.
+    """
+    def __init__(
+        self,
+        noising_kernel: NoisingKernel,
+        verbose: bool = False,
+    ):
+        self.noising_kernel = noising_kernel
+        self.verbose = verbose
+    
     def __call__(
         self,
-        net, 
-        coords, 
-        latents, 
-        class_labels=None,
+        net, # the model
+        coords, # [dim, N1]
+        coord_ref, # [dim, N2]
+        values_ref, # [N2]
+        conditioning=None,
         num_steps=18, 
         sigma_min=0.002, 
         sigma_max=80, 
+        rho=7.,
     ):
         # Adjust noise levels based on what's supported by the network.
-        
         sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
         sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
 
         # Time step discretization.
-        step_indices = torch.arange(num_steps, dtype=torch.float32, device=latents.device)
-        sigma_steps = sigma_max + step_indices / (num_steps - 1) * (sigma_min - sigma_max)
-        sigma_steps = torch.cat([torch.as_tensor(sigma_steps), torch.zeros_like(sigma_steps[:1])]) # t_N = 0
-        
+        step_indices = torch.arange(num_steps, dtype=torch.float32, device=coords.device)
+        t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+        t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+
         # Main sampling loop.
-        x_next = latents.to(torch.float32) * sigma_steps[0]
-        for i, (sigma_cur, sigma_next) in enumerate(zip(sigma_steps[:-1], sigma_steps[1:])): # 0, ..., N-1
+        all_coords = torch.cat([coords, coord_ref], dim=1) # [dim, N1 + N2]
+        x_next = self.noising_kernel.sample(all_coords.unsqueeze(0)).float().squeeze() * t_steps[0] # [N1 + N2]
+        if self.verbose:
+            iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling with imputation")
+        else:
+            iterable_range = enumerate(zip(t_steps[:-1], t_steps[1:]))
+        for i, (t_cur, t_next) in iterable_range: # 0, ..., N-1
             x_cur = x_next
 
             x_hat = x_cur
-            sigma_hat = sigma_cur
+            t_hat = t_cur
 
-            denoised = net(coords=coords, samples=x_hat, sigma=sigma_hat.repeat(x_hat.shape[0]), conditioning=class_labels).to(torch.float32)
-            d_cur = (x_hat - denoised) / sigma_hat
-            x_next = x_hat + (sigma_next - sigma_hat) * d_cur
+            # Euler step.
+            noised_out_reference = t_cur * self.noising_kernel.sample(coord_ref.unsqueeze(0)).float().squeeze() + values_ref
+            x_hat = torch.cat([x_hat[:coords.shape[1]], noised_out_reference])
+            denoised = net(coords=all_coords, samples=x_hat.unsqueeze(0), sigma=t_hat.unsqueeze(0), conditioning=conditioning).to(torch.float32).squeeze()
+            d_cur = (x_hat - denoised) / t_hat
+            x_next = x_hat + (t_next - t_hat) * d_cur
 
-        return x_next
+            # Apply 2nd order correction.
+            if i < num_steps - 1:
+                x_next = torch.cat([x_next[:coords.shape[1]], noised_out_reference])
+                denoised = net(coords=all_coords, samples=x_next.unsqueeze(0), sigma=t_hat.unsqueeze(0), conditioning=conditioning).to(torch.float32).squeeze()
+                d_prime = (x_next - denoised) / t_next
+                x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
+
+        return x_next#[:coords.shape[1]]
