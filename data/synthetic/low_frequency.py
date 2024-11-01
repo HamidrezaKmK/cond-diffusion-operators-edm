@@ -2,17 +2,9 @@
 This is a low frequency 1D dataset that is used to test the diffusion-based neural operator.
 """
 
-import os
-import inspect
+from typing import Literal
 
-from typing import Callable, Tuple
-from pathlib import Path
-import functools
-
-import dotenv
 import torch
-import numpy as np
-from noise import pnoise1, pnoise2, pnoise3
 
 from torch.utils.data import Dataset
 import torch
@@ -32,6 +24,7 @@ class PinkNoise1D(Dataset):
         total_count: int,
         num_samples: int,
         low_pass_threshold: float | None = 0.1,
+        threshold_type: Literal["relative", "absolute"] = "relative",
         make_irregular: bool = False,
         fixed_irregularity_seed: int | None = None,
         bernoulli_p: float = 0.8,
@@ -42,6 +35,7 @@ class PinkNoise1D(Dataset):
         self.make_irregular = make_irregular
         self.fixed_irregularity_seed = fixed_irregularity_seed
         self.bernoulli_p = bernoulli_p
+        self.threshold_type = threshold_type
     
     def __len__(self):
         return self.total_count
@@ -57,8 +51,12 @@ class PinkNoise1D(Dataset):
         freqs_idx = torch.arange(1, freqs.shape[-1] + 1, device=freqs.device)
         rescale_freqs = freqs / torch.sqrt(freqs_idx.float())
         if self.low_pass_threshold is not None:
-            rescale_freqs[freqs_idx > self.low_pass_threshold * self.num_samples] = 0
-
+            if self.threshold_type == "relative":
+                rescale_freqs[freqs_idx > self.low_pass_threshold * self.num_samples] = 0
+            elif self.threshold_type == "absolute":
+                rescale_freqs[freqs_idx > self.low_pass_threshold] = 0
+            else:
+                raise ValueError("Invalid threshold type")
         # Perform inverse FFT to convert the signal back to the time domain
         pink_noise = torch.fft.irfft(rescale_freqs, n=self.num_samples)
         pink_noise = (pink_noise - pink_noise.mean()) / pink_noise.std()
