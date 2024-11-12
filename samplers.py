@@ -9,6 +9,25 @@ from tqdm import tqdm
 
 from training.noising_kernels import NoisingKernel
 
+from contextlib import contextmanager
+import torch
+
+@contextmanager
+def freeze_model(net: torch.nn.Module):
+    # Store the original requires_grad state for all parameters
+    original_states = {param: param.requires_grad for param in net.parameters()}
+    
+    try:
+        # Set requires_grad to False to freeze the model
+        for param in net.parameters():
+            param.requires_grad = False
+        yield net  # Yield control back to the caller with the model frozen
+    finally:
+        # Restore original requires_grad states after the block of code finishes
+        for param, requires_grad in original_states.items():
+            param.requires_grad = requires_grad
+
+
 class BaseSampler(ABC):
     @abstractmethod
     def __call__(self):
@@ -34,40 +53,39 @@ class EDMSampler(BaseSampler):
         sigma_max=80, 
         rho=7,
     ):
-        # Adjust noise levels based on what's supported by the network.
-        
-        sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
-        sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
+        with freeze_model(net):
+            # Adjust noise levels based on what's supported by the network.
+            
+            sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
+            sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
 
-        # Time step discretization.
-        step_indices = torch.arange(num_steps, dtype=torch.float32, device=latents.device)
-        t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
-        t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+            # Time step discretization.
+            step_indices = torch.arange(num_steps, dtype=torch.float32, device=latents.device)
+            t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+            t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
 
-        # Main sampling loop.
-        x_next = latents.to(torch.float32)# * t_steps[0] TODO: check why this is added here!
-        if self.verbose:
-            iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling")
-        else:
-            iterable_range = enumerate(zip(t_steps[:-1], t_steps[1:]))
-        for i, (t_cur, t_next) in iterable_range: # 0, ..., N-1
-            x_cur = x_next
+            # Main sampling loop.
+            x_next = latents.to(torch.float32)# * t_steps[0] TODO: check why this is added here!
+            if self.verbose:
+                iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling")
+            else:
+                iterable_range = enumerate(zip(t_steps[:-1], t_steps[1:]))
+            for i, (t_cur, t_next) in iterable_range: # 0, ..., N-1
+                x_cur = x_next
 
-            x_hat = x_cur
-            t_hat = t_cur
+                x_hat = x_cur
+                t_hat = t_cur
 
-            # Euler step.
-            # print(coords.shape, x_hat.shape, t_hat.repeat(x_hat.shape[0]).shape)
-            # print("---")
-            denoised = net(coords=coords, samples=x_hat, sigma=t_hat.repeat(x_hat.shape[0]), conditioning=conditioning).to(torch.float32)
-            d_cur = (x_hat - denoised) / t_hat
-            x_next = x_hat + (t_next - t_hat) * d_cur
+                # Euler step.
+                denoised = net(coords=coords, samples=x_hat, sigma=t_hat.repeat(x_hat.shape[0]), conditioning=conditioning).to(torch.float32)
+                d_cur = (x_hat - denoised) / t_hat
+                x_next = x_hat + (t_next - t_hat) * d_cur
 
-            # Apply 2nd order correction.
-            if i < num_steps - 1:
-                denoised = net(coords=coords, samples=x_next, sigma=t_hat.repeat(x_hat.shape[0]), conditioning=conditioning).to(torch.float32)
-                d_prime = (x_next - denoised) / t_next
-                x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
+                # Apply 2nd order correction.
+                if i < num_steps - 1:
+                    denoised = net(coords=coords, samples=x_next, sigma=t_hat.repeat(x_hat.shape[0]), conditioning=conditioning).to(torch.float32)
+                    d_prime = (x_next - denoised) / t_next
+                    x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
         return x_next
 
@@ -87,6 +105,7 @@ class ImputationEDMSampler(ABC):
     def __call__(
         self,
         net, # the model
+        batch_size, # the batch size
         coords, # [dim, N1]
         coord_ref, # [dim, N2]
         values_ref, # [N2]
@@ -96,39 +115,159 @@ class ImputationEDMSampler(ABC):
         sigma_max=80, 
         rho=7.,
     ):
-        # Adjust noise levels based on what's supported by the network.
-        sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
-        sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
+        with freeze_model(net):
+            # Adjust noise levels based on what's supported by the network.
+            sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
+            sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
 
-        # Time step discretization.
-        step_indices = torch.arange(num_steps, dtype=torch.float32, device=coords.device)
-        t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
-        t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+            # Time step discretization.
+            step_indices = torch.arange(num_steps, dtype=torch.float32, device=coords.device)
+            t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+            t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
 
-        # Main sampling loop.
-        all_coords = torch.cat([coords, coord_ref], dim=1) # [dim, N1 + N2]
-        x_next = self.noising_kernel.sample(all_coords.unsqueeze(0)).float().squeeze() * t_steps[0] # [N1 + N2]
-        if self.verbose:
-            iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling with imputation")
-        else:
-            iterable_range = enumerate(zip(t_steps[:-1], t_steps[1:]))
-        for i, (t_cur, t_next) in iterable_range: # 0, ..., N-1
-            x_cur = x_next
-            x_hat = x_cur
-            t_hat = t_cur
+            # Main sampling loop.
+            all_coords = torch.cat([coords, coord_ref], dim=1) # [dim, N1 + N2]
+            x_next = self.noising_kernel.sample(all_coords.unsqueeze(0).repeat(batch_size, 1, 1)).float() * t_steps[0] # [batch_size, N1 + N2]
+            if self.verbose:
+                iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling with imputation")
+            else:
+                iterable_range = enumerate(zip(t_steps[:-1], t_steps[1:]))
+            for i, (t_cur, t_next) in iterable_range: # 0, ..., N-1
+                x_cur = x_next
+                x_hat = x_cur
+                t_hat = t_cur
 
-            # Euler step.
-            noised_out_reference = t_cur * self.noising_kernel.sample(coord_ref.unsqueeze(0)).float().squeeze() + values_ref
-            x_hat = torch.cat([x_hat[:coords.shape[1]], noised_out_reference])
-            denoised = net(coords=all_coords, samples=x_hat.unsqueeze(0), sigma=t_hat.unsqueeze(0), conditioning=conditioning).to(torch.float32).squeeze()
-            d_cur = (x_hat - denoised) / t_hat
-            x_next = x_hat + (t_next - t_hat) * d_cur
+                # Euler step.
+                noised_out_reference = t_cur * self.noising_kernel.sample(coord_ref.unsqueeze(0).repeat(batch_size, 1, 1)).float() + values_ref.unsqueeze(0).repeat(batch_size, 1) 
+                x_hat = torch.cat([x_hat[:, :coords.shape[1]], noised_out_reference], dim=1)
+                with torch.no_grad():
+                    denoised = net(coords=all_coords, samples=x_hat, sigma=t_hat.repeat(batch_size), conditioning=conditioning).to(torch.float32)
+                d_cur = (x_hat - denoised) / t_hat
+                x_next = x_hat + (t_next - t_hat) * d_cur
 
-            # Apply 2nd order correction.
-            if i < num_steps - 1:
-                x_next = torch.cat([x_next[:coords.shape[1]], noised_out_reference])
-                denoised = net(coords=all_coords, samples=x_next.unsqueeze(0), sigma=t_hat.unsqueeze(0), conditioning=conditioning).to(torch.float32).squeeze()
-                d_prime = (x_next - denoised) / t_next
-                x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
+                # Apply 2nd order correction.
+                if i < num_steps - 1:
+                    # print(x_next.shape, ">>")
+                    x_next = torch.cat([x_next[:, :coords.shape[1]], noised_out_reference], dim=1)
+                    with torch.no_grad():
+                        denoised = net(coords=all_coords, samples=x_next, sigma=t_hat.repeat(batch_size), conditioning=conditioning).to(torch.float32)
+                    d_prime = (x_next - denoised) / t_next
+                    x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
         return x_next#[:coords.shape[1]]
+
+class ImputationTweedieSampler(ABC):
+    """
+    A sampler equippied with imputation that uses the Tweedie estimates.
+
+    This is based on: https://arxiv.org/pdf/2411.00359
+    """
+    def __init__(
+        self,
+        noising_kernel: NoisingKernel,
+        verbose: bool = False,
+        tweedie_optimization_steps: int = 10,
+        tweedie_lr: float = 0.001,
+        l: float = 0.1,
+        r: float = 1.,
+        rbf_sigma: float = 3.,
+    ):
+        self.noising_kernel = noising_kernel
+        self.verbose = verbose
+        self.tweedie_optimization_steps = tweedie_optimization_steps
+        self.tweedie_lr = tweedie_lr
+
+        # the kernel parameters
+        self.l = l
+        self.r = r
+        self.rbf_sigma = rbf_sigma
+
+    def __call__(
+        self,
+        net, # the model
+        batch_size, # the batch size
+        coords, # [dim, N1]
+        coord_ref, # [dim, N2]
+        values_ref, # [N2]
+        conditioning=None,
+        num_steps=18, 
+        sigma_min=0.002, 
+        sigma_max=80, 
+        rho=7.,
+    ):
+        with freeze_model(net):
+            
+            
+
+
+            # Adjust noise levels based on what's supported by the network.
+            sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
+            sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
+
+            # Time step discretization.
+            step_indices = torch.arange(num_steps, dtype=torch.float32, device=coords.device)
+            t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+            t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+
+            # Main sampling loop.
+            all_coords = torch.cat([coords, coord_ref], dim=1) # [dim, N1 + N2]
+
+
+            # Precompute the conditional covariance for the GP regression
+            C = self.rbf_sigma**2 * torch.exp(-torch.cdist(all_coords.permute(1, 0), all_coords.permute(1, 0), p=2) / (2 * self.l**2))
+            C_nr = C[:, coords.shape[1]:]
+            C_r = C[coords.shape[1]:, coords.shape[1]:]
+            conditional_cov = C - C_nr @ torch.linalg.pinv(C_r) @ C_nr.T
+            conditional_mu = C_nr @ torch.linalg.pinv(C_r) @ values_ref
+            conditional_cov_inv = torch.linalg.inv(conditional_cov + self.r**2 * torch.eye(conditional_cov.shape[0]).to(conditional_cov.device))
+
+
+            x_next = self.noising_kernel.sample(all_coords.repeat(batch_size, 1, 1)).float()* t_steps[0] # [N1 + N2]
+            if self.verbose:
+                iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling with imputation")
+            else:
+                iterable_range = enumerate(zip(t_steps[:-1], t_steps[1:]))
+            for i, (t_cur, t_next) in iterable_range: # 0, ..., N-1
+                x_cur = x_next
+
+                x_hat = x_cur
+                t_hat = t_cur
+
+                denoised = net(coords=all_coords, samples=x_hat, sigma=t_hat.repeat(batch_size), conditioning=conditioning).to(torch.float32)
+                d_cur = (x_hat - denoised) / t_hat
+                x_next = x_hat + (t_next - t_hat) * d_cur
+
+                # Apply 2nd order correction.
+                if i < num_steps - 1:
+                    denoised = net(coords=all_coords, samples=x_next, sigma=t_hat.repeat(batch_size), conditioning=conditioning).to(torch.float32)
+                    d_prime = (x_next - denoised) / t_next
+                    x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
+                
+                # Apply conditional optimization
+                if i < num_steps - 1:
+                    for ii in range(self.tweedie_optimization_steps):
+                        if self.verbose:
+                            iterable_range.set_description(f"Optimizing Tweedie estimate [{ii+1}/{self.tweedie_optimization_steps}]")
+                        x_next.requires_grad = True
+                        denoised = net(coords=all_coords, samples=x_next, sigma=t_hat.repeat(batch_size), conditioning=conditioning).to(torch.float32)
+                        
+                        # TODO: check if the following is correct
+                        x0_hat = 2 * x_next - denoised
+
+                        log_density = -0.5 * torch.einsum("bi,ij,bj->b", (x0_hat - conditional_mu[None, :], conditional_cov_inv, x0_hat - conditional_mu[None, :]))
+                        # check if log_density is nan
+                        if torch.isnan(log_density).any():
+                            assert False, "Log density is nan!"
+                        
+                        # TODO: fix this with sorting
+                        continuity_term = (x0_hat[:, 1:] - x0_hat[:, :-1]).pow(2).sum(dim=-1)
+                        
+
+                        (-log_density).sum().backward()
+                        x_next_grad = x_next.grad.clone()
+                        # clip the gradients
+                        # x_next_grad = torch.clamp(x_next_grad, -1, 1)
+                        x_next.requires_grad = False
+
+                        x_next = x_next - self.tweedie_lr * x_next_grad
+        return x_next  
