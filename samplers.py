@@ -168,9 +168,8 @@ class TheoreticalImputationTweedieSampler(ABC):
         verbose: bool = False,
         tweedie_optimization_steps: int = 10,
         tweedie_lr: float = 0.001,
-        l: float = 0.1,
+        l: float = 0.05,
         r: float = 0.1,
-        rbf_sigma: float = 1.,
     ):
         self.noising_kernel = noising_kernel
         self.verbose = verbose
@@ -180,7 +179,6 @@ class TheoreticalImputationTweedieSampler(ABC):
         # the kernel parameters
         self.l = l
         self.r = r
-        self.rbf_sigma = rbf_sigma
 
     def __call__(
         self,
@@ -197,9 +195,6 @@ class TheoreticalImputationTweedieSampler(ABC):
     ):
         with freeze_model(net):
             
-            
-
-
             # Adjust noise levels based on what's supported by the network.
             sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
             sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
@@ -213,12 +208,13 @@ class TheoreticalImputationTweedieSampler(ABC):
             all_coords = torch.cat([coords, coord_ref], dim=1) # [dim, N1 + N2]
 
 
-            C = self.rbf_sigma**2 * torch.exp(-torch.cdist(all_coords.permute(1, 0), all_coords.permute(1, 0), p=2) / (2 * self.l**2))
+            C = torch.exp(-(torch.cdist(all_coords.permute(1, 0), all_coords.permute(1, 0), p=2))/ (2 * self.l**2))
             C_nr = C[:, coords.shape[1]:]
             C_r = C[coords.shape[1]:, coords.shape[1]:]
-            conditional_cov = C_r - C_nr.T @ torch.linalg.pinv(C) @ C_nr
-            conditional_mu_mat = C_nr.T @ torch.linalg.pinv(C)
-            conditional_cov_inv = torch.linalg.inv(conditional_cov + self.r**2 * torch.eye(conditional_cov.shape[0]).to(conditional_cov.device))
+            C_inv = torch.linalg.inv(C + self.r**2 * torch.eye(C.shape[0]).to(C.device))
+            conditional_chunk = C_r - C_nr.T @ C_inv @ C_nr
+            conditional_mu_mat = C_nr.T @ C_inv
+            conditional_cov_inv = torch.linalg.inv(conditional_chunk)
 
 
             x_next = self.noising_kernel.sample(all_coords.repeat(batch_size, 1, 1)).float()* t_steps[0] # [N1 + N2]
@@ -252,17 +248,20 @@ class TheoreticalImputationTweedieSampler(ABC):
                         
                         # TODO: check if the following is correct
                         x0_hat = 2 * x_next - denoised
-
+                        
+                        # TODO: check with unbalanced reference vs. all_coords
                         obs_mu = torch.einsum("ij,bj->bi", conditional_mu_mat, x0_hat)
-                        log_density = -0.5 * torch.einsum("bi,ij,bj->b", (values_ref[None, :] - obs_mu, conditional_cov_inv, values_ref[None, :] - obs_mu))
+                        log_density = -0.5 * torch.einsum("bi,ij,bj->b", (values_ref - obs_mu, conditional_cov_inv, values_ref - obs_mu)) 
                         # check if log_density is nan
                         assert not torch.isnan(log_density).any(), "Log density contains NaNs!"
 
                         log_density.sum().backward()
                         x_next_grad = x_next.grad.clone()
+                        x_next_grad = x_next_grad / torch.sqrt(-log_density.detach())[:, None]
                         x_next.requires_grad = False
 
-                        x_next = x_next + self.tweedie_lr * x_next_grad / values_ref.numel()
+                        x_next = x_next + self.tweedie_lr * x_next_grad * coord_ref.shape[1] / all_coords.shape[1]
+                
         return x_next
 
 class PracticalImputationTweedieSampler(ABC):
@@ -275,8 +274,8 @@ class PracticalImputationTweedieSampler(ABC):
         self,
         noising_kernel: NoisingKernel,
         verbose: bool = False,
-        tweedie_optimization_steps: int = 10,
-        tweedie_lr: float = 0.001,
+        tweedie_optimization_steps: int = 30,
+        tweedie_lr: float = 0.05,
         l: float = 0.1,
         r: float = 1.,
         rbf_sigma: float = 3.,
@@ -297,7 +296,7 @@ class PracticalImputationTweedieSampler(ABC):
         batch_size, # the batch size
         coords, # [dim, N1]
         coord_ref, # [dim, N2]
-        values_ref, # [N2]
+        values_ref, # [batch_size, N2]
         conditioning=None,
         num_steps=18, 
         sigma_min=0.002, 
@@ -306,9 +305,6 @@ class PracticalImputationTweedieSampler(ABC):
     ):
         with freeze_model(net):
             
-            
-
-
             # Adjust noise levels based on what's supported by the network.
             sigma_min = max(sigma_min, getattr(net, 'sigma_min', 0))
             sigma_max = min(sigma_max, getattr(net, 'sigma_max', float('inf')))
@@ -326,9 +322,10 @@ class PracticalImputationTweedieSampler(ABC):
             C = self.rbf_sigma**2 * torch.exp(-torch.cdist(all_coords.permute(1, 0), all_coords.permute(1, 0), p=2) / (2 * self.l**2))
             C_nr = C[:, coords.shape[1]:]
             C_r = C[coords.shape[1]:, coords.shape[1]:]
-            conditional_cov = C - C_nr @ torch.linalg.pinv(C_r) @ C_nr.T
-            conditional_mu = C_nr @ torch.linalg.pinv(C_r) @ values_ref
-            conditional_cov_inv = torch.linalg.inv(conditional_cov + self.r**2 * torch.eye(conditional_cov.shape[0]).to(conditional_cov.device))
+            C_r_inv = torch.linalg.inv(C_r + self.r**2 * torch.eye(C_r.shape[0]).to(C_r.device))
+            conditional_cov = C - C_nr @ C_r_inv @ C_nr.T
+            conditional_mu = torch.einsum("ij,bj->bi", C_nr @ C_r_inv, values_ref)
+            conditional_cov_inv = torch.linalg.inv(conditional_cov)
 
 
             x_next = self.noising_kernel.sample(all_coords.repeat(batch_size, 1, 1)).float()* t_steps[0] # [N1 + N2]
@@ -363,12 +360,13 @@ class PracticalImputationTweedieSampler(ABC):
                         # TODO: check if the following is correct
                         x0_hat = 2 * x_next - denoised
 
-                        log_density = -0.5 * torch.einsum("bi,ij,bj->b", (x0_hat - conditional_mu[None, :], conditional_cov_inv, x0_hat - conditional_mu[None, :]))
+                        log_density = -0.5 * torch.einsum("bi,ij,bj->b", (x0_hat - conditional_mu, conditional_cov_inv, x0_hat - conditional_mu))
                         # check if log_density is nan
                         assert not torch.isnan(log_density).any(), "Log density contains NaNs!"
 
                         log_density.sum().backward()
                         x_next_grad = x_next.grad.clone()
+                        x_next_grad = x_next_grad / torch.sqrt(-log_density.detach())[:, None]
                         x_next.requires_grad = False
 
                         x_next = x_next + self.tweedie_lr * x_next_grad
