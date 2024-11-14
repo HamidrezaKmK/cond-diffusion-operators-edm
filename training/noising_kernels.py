@@ -12,10 +12,10 @@ class RBFIrregular(NoisingKernel):
     def __init__(
         self, 
         scale: float = 0.05,
-        eps: float = 0.01,
+        accuracy: int = 20,
     ):
         self.scale = scale
-        self.eps = eps
+        self.accuracy = accuracy
         self._last_coords = None
         self._L = None
 
@@ -35,10 +35,22 @@ class RBFIrregular(NoisingKernel):
             self._last_coords = coords - coords[0, 0]
             C = torch.exp(-torch.cdist(coords, coords, p=2) / (2 * self.scale**2))
             I = torch.eye(K).to(device=coords.device) 
-            I.mul_(self.eps**2)
-            C.add_(I.unsqueeze(0).repeat(batch_size, 1, 1)) # make it PSD
-            L = torch.linalg.cholesky(C)
-            del C, I
+            
+            # do an inline binary search to find the minimal jittering value to get the Cholesky to work
+            l_eps = 0.0
+            r_eps = 5.0
+            for _ in range(self.accuracy):
+                mid_eps = (l_eps + r_eps) / 2
+                C_eps = C + (mid_eps ** 2 * I).repeat(batch_size, 1, 1) # make it PSD
+                try:
+                    L = torch.linalg.cholesky(C_eps)
+                    r_eps = mid_eps
+                except:
+                    l_eps = mid_eps
+            C_eps = C + (r_eps ** 2 * I).repeat(batch_size, 1, 1) 
+            
+            L = torch.linalg.cholesky(C_eps)
+            del C, I, C_eps
             self._L = L
         
         base_noise = torch.randn((batch_size, K)).to(dtype=coords.dtype).to(device=coords.device)
