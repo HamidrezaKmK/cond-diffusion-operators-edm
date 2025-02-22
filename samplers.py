@@ -252,15 +252,6 @@ class TweedieImputer(ABC):
             all_coords = torch.cat([coords, coord_ref], dim=1) # [dim, N1 + N2]
 
 
-            C = torch.exp(-(torch.cdist(all_coords.permute(1, 0), all_coords.permute(1, 0), p=2))/ (2 * self.l**2))
-            C_nr = C[:, coords.shape[1]:]
-            C_r = C[coords.shape[1]:, coords.shape[1]:]
-            C_inv = torch.linalg.inv(C + self.r**2 * torch.eye(C.shape[0]).to(C.device))
-            conditional_chunk = C_r - C_nr.T @ C_inv @ C_nr
-            conditional_mu_mat = C_nr.T @ C_inv
-            conditional_cov_inv = torch.linalg.inv(conditional_chunk)
-
-
             x_next = self.noising_kernel.sample(all_coords.repeat(batch_size, 1, 1)).float()* t_steps[0] # [N1 + N2]
             if self.verbose:
                 iterable_range = tqdm(list(enumerate(zip(t_steps[:-1], t_steps[1:]))), desc="Sampling with imputation")
@@ -283,9 +274,17 @@ class TweedieImputer(ABC):
                     denoised = net(coords=all_coords, samples=x0_hat, sigma=t_cur1.repeat(batch_size), conditioning=conditioning).to(torch.float32)
                     d_cur = (x0_hat - denoised) / t_cur1
                     x0_hat = x0_hat + (t_next1 - t_cur1) * d_cur
-        
+
+                C = torch.exp(-(torch.cdist(all_coords.permute(1, 0), all_coords.permute(1, 0), p=2))/ (2 * self.l**2))
+                C_nr = C[:, coords.shape[1]:]
+                C_r = C[coords.shape[1]:, coords.shape[1]:]
+                C_inv = torch.linalg.pinv(C)
+                conditional_chunk = C_r - C_nr.T @ C_inv @ C_nr
+                conditional_mu_mat = C_nr.T @ C_inv
+                conditional_cov_inv = torch.linalg.inv(conditional_chunk * t_hat ** 2 + torch.eye(conditional_chunk.shape[0]) * self.r ** 2)
+
                 obs_mu = torch.einsum("ij,bj->bi", conditional_mu_mat, x0_hat)
-                log_density = -0.5 * torch.einsum("bi,ij,bj->b", (values_ref - obs_mu, conditional_cov_inv, values_ref - obs_mu))
+                log_density = -0.5 * torch.einsum("bi,ij,bj->b", (values_ref - obs_mu, conditional_cov_inv, values_ref - obs_mu)) #/ (self.r ** 2 + t_hat ** 2)
                 
                 # check if log_density is nan
                 assert not torch.isnan(log_density).any(), "Log density contains NaNs!"
