@@ -1,4 +1,4 @@
-name: edm-operator
+name: ddo-assimilation
 channels:
   - pytorch
   - nvidia
@@ -19,6 +19,7 @@ dependencies:
       - imageio-ffmpeg
       - pyspng
       - git+https://gitlab.eumetsat.int/eumetlab/data-services/eumdac.git
+      - git+https://github.com/brightbandtech/nnja-ai.git
       - matplotlib
       - python-dotenv
       - xarray[complete]

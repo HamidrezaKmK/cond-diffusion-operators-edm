@@ -9,3 +9,5 @@ exps/
 slurm*.out
 .env
 outputs
+
+wandb

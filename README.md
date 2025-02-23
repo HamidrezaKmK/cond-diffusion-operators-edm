@@ -1,57 +1,23 @@
-# EDM in function spaces (edm-fs)
+# Denoising Diffusion Operators for Data Assimilation
 
-This is the public code release of Christopher Beckham's internship at NVIDIA in using neural operators for time series modelling of climate data. This repository is based on [EDM](https://github.com/NVlabs/edm/).
+This is a repo for data-assimilation using denoising diffusion operators. The general idea here is tha we aim to learn the underlying stochastic process governing climate data and use that as the prior for Bayesian inference.
 
 ## Setup
 
-This repository is based on the EDM codebase and as such will have a similar set of requirements.  First create a conda environment. We will use the `environment.yml` file that is in the root directory of this repository. This is the same as the corresponding environment file in the original EDM repository from Karras et al located [here](https://github.com/NVlabs/edm).
-
-To create an environment called `edm_fs` we do:
+To create the environment called `ddo-assimilation` run the following:
 
 ```
-conda env create -n edm_fs -f environment.yml
+conda env create -f environment.yml
+conda activate ddo-assimilation
 ```
 
-Some dependencies may be flexible but PyTorch 1.12 is absolutely crucial (see [this issue](https://github.com/NVlabs/edm/issues/18)).
+## Datasets
 
-### Dependencies
+We use the following sources of datasets:
 
-We also need to install the `neuraloperators` library. For this repo we need to use my fork of it [here](https://github.com/christopher-beckham/neuraloperator). (Whoever builds on top of this repo may find it useful to see what has changed and try to reconsolidate it with the latest version of the library.)
-
-Clone it, switch to the `dev_refactor` branch and install it with the following steps:
-
-```
-git clone git@github.com:christopher-beckham/neuraloperator.git
-cd neuraloperator
-git checkout dev_refactor
-pip install -e .
-```
-
-Note that you may also need to install other dependencies that are required by `neuraloperators`. Check their `requirements.txt` file. We need to also install:
- 
-- jstyleson: `pip install jstyleson`
-- torchvision: `pip install torchvision==0.13 --no-deps` (0.13 is compatible with PyTorch `1.12`, and you must specify no-deps so that it doesn't force installing PyTorch 2.0)
-- ffmpeg: `conda install -c conda-forge ffmpeg`
-
-### Environment variables
-
-Also cd into `exps` and copy `cp env.sh.bak env.sh` and define the following env variables:
-
-- `$SAVE_DIR`: some location where experiments are to be saved.
-- `$DATA_DIR`: this should be kept as is, since it points to the raw CWA/ERA dataset zarr file.
-
-### Dataset
-
-Since the climate dataset used for the internship is not (yet) public, we have to use an open source substitute. For this we use a 2D Navier-Stokes dataset which consists of trajectories in time. Concretely, the neural operator diffusion model is trained to model the following conditional distribution  `p(u_t | y_{t-k}, ..., y_{t+k})` where:
-- `u` is the function to model (whose samples are at a fixed discretisation which is defined by `resolution` in `training.datasets.NSDataset`, e.g. `128` for 128px on both spatial dimensions);
-- `y` are samples from the same function at a much coarser discretisation, and this is determined by `lowres_scale_factor` in `training.datasets.NSDataset`, i.e. if `lowres_scale_factor=0.0625` then this is a 16x reduction in spatial resolution).
-- `k` denotes the size of the context window.
-
-Whatever `$DATA_DIR` is defined to, cd into that directory and download the data:
-
-```
-wget https://zenodo.org/records/7495555/files/2D_NS_Re40.npy
-```
+1. Observational data directly from the ECMWF API ([link to notebook for examples](./notebooks/ecmwf.ipynb)).
+2. NOAA observational data from Brightband (NNJA-AI) ranging from 2021 up to 2024 ([link to notebook for examples](./notebooks/nnja.ipynb)).
+3. ERA-5 reanalysis data
 
 ### Visualising dataset
 
@@ -99,6 +65,7 @@ bash generate_samples.sh \
 ```
 
 Respectively, these arguments correspond to:
+
 - The name of the experiment, _relative_ to `$SAVE_DIR`;
 - number of diffusion steps to perform (higher is better quality but takes longer);
 - length of the trajectory to generate;

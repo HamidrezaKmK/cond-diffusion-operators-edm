@@ -398,6 +398,7 @@ class ERA5RegionalDataset(RegionalDataset):
             chunks=None,
             storage_options=dict(token='anon'),
         )
+        
         self.all_observations = ds.sel(time=slice(ds.attrs['valid_time_start'], ds.attrs['valid_time_stop']))[attribute]
 
     def __getitem__(self, idx):
