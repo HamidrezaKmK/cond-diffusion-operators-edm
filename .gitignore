@@ -7,3 +7,7 @@ downloads/
 fid-refs/
 exps/
 slurm*.out
+.env
+outputs
+
+wandb
