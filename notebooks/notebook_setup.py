@@ -14,7 +14,7 @@ import torch
 # Configure file system
 project_root = Path(__file__).parent
 while True:
-    if (project_root / "README.md").exists():
+    if (project_root / ".gitignore").exists():
         break
     project_root = project_root.parent
 data_path = project_root / "data"
